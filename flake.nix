@@ -1,5 +1,5 @@
 {
-  description = "On-demand, shell-independent rekeying for agenix secrets across SSH hosts";
+  description = "On-demand tools for reading, editing, and rekeying agenix secrets through local or remote hosts";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -19,7 +19,7 @@
       ];
     in
     {
-      lib.mkRekeyApp = import ./lib { inherit agenix; };
+      lib = import ./lib { inherit agenix; };
 
       devShells = nixpkgs.lib.genAttrs systems (
         system:
