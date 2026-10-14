@@ -84,6 +84,40 @@ class RuntimeBundleTests(SecretIntegrationFixture):
         self.assert_success(self.run_controller(), b"edited secret\n")
         self.assertEqual(self.remote_log.read_text().count("mktemp -d"), 1)
 
+    def test_read_and_edit_with_readonly_runtime_directories(self):
+        runtime = self.root / "readonly-runtime"
+        shutil.copytree(PROJECT / "scripts", runtime)
+        # Include a nested directory to exercise recursive permission normalization.
+        (runtime / "agenix_toolkit" / "nested").mkdir()
+        (runtime / "agenix_toolkit" / "nested" / "data").write_text("fixture")
+        directories = [runtime, *(p for p in runtime.rglob("*") if p.is_dir())]
+        for path in runtime.rglob("*"):
+            if path.is_file():
+                path.chmod(0o444)
+        for path in directories:
+            path.chmod(0o555)
+
+        def restore_fixture_permissions():
+            for path in directories:
+                path.chmod(0o755)
+
+        self.addCleanup(restore_fixture_permissions)
+        self.controller = runtime / "controller.py"
+        self.env["AGENIX_TOOLKIT_WORKER"] = str(runtime / "worker.py")
+        self.env["PYTHONPATH"] = ""
+        self.settings["mode"] = "read"
+        result = self.run_controller(interactive=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "original secret\n")
+        self.assertEqual(self.snapshot(), self.before)
+        self.settings["mode"] = "edit"
+        self.assert_success(self.run_controller(), b"edited secret\n")
+        for path in directories:
+            self.assertEqual(path.stat().st_mode & 0o777, 0o555)
+        for line in self.remote_log.read_text().splitlines():
+            if ": rm -rf -- " in line:
+                self.assertFalse(Path(line.split(": rm -rf -- ", 1)[1]).exists())
+
     @unittest.skipUnless(shutil.which("nix"), "Missing Nix evaluator")
     def test_nix_launcher_captures_package_directory(self):
         expression = f"""

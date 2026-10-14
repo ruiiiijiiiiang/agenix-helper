@@ -5,6 +5,7 @@ from __future__ import annotations
 import filecmp
 import os
 import shutil
+import stat
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,6 +53,11 @@ class Stage:
             helper / "agenix_toolkit",
             ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
         )
+        # copytree preserves read-only Nix store directory modes. The staged
+        # copy must be removable locally and after its round trip to a worker.
+        runtime = helper / "agenix_toolkit"
+        for directory in [runtime, *(path for path in runtime.rglob("*") if path.is_dir())]:
+            directory.chmod(stat.S_IMODE(directory.stat().st_mode) | stat.S_IRWXU)
         for name, rule in manifest.items():
             recipients = helper / "recipients" / name
             recipients.parent.mkdir(parents=True, exist_ok=True)
