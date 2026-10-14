@@ -15,23 +15,39 @@ class LocalIntegrationTests(SecretIntegrationFixture):
         self.settings["hosts"] = {
             "localhost": {"local": True, "identity": str(self.keys / "host")},
         }
-        self.keys_file.write_text(f"[ {json.dumps(self.host_key)} {json.dumps(self.editor_key)} ]\n")
+        self.keys_file.write_text(
+            f"[ {json.dumps(self.host_key)} {json.dumps(self.editor_key)} ]\n"
+        )
         self.before = self.snapshot()
 
     def rekey(self, args=None):
-        return self.run_controller(interactive=False, args=args or ["--host", "localhost"])
+        return self.run_controller(
+            interactive=False, args=args or ["--host", "localhost", "--all-secrets"]
+        )
 
     def assert_rekey_success(self, result):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         checked = subprocess.run(
-            ["agenix", "--check"], env={**self.env, "AGENIX_RULES": str(self.rules)},
-            capture_output=True, text=True,
+            ["agenix", "--check"],
+            env={**self.env, "AGENIX_RULES": str(self.rules)},
+            capture_output=True,
+            text=True,
         )
         self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
-        for secret, plaintext in ((self.secret, b"original secret\n"), (self.other, b"unrelated secret\n")):
+        for secret, plaintext in (
+            (self.secret, b"original secret\n"),
+            (self.other, b"unrelated secret\n"),
+        ):
             decrypted = subprocess.run(
-                ["age", "--decrypt", "--identity", str(self.keys / "editor"), str(secret)],
-                capture_output=True, check=True,
+                [
+                    "age",
+                    "--decrypt",
+                    "--identity",
+                    str(self.keys / "editor"),
+                    str(secret),
+                ],
+                capture_output=True,
+                check=True,
             )
             self.assertEqual(decrypted.stdout, plaintext)
         self.assertEqual(set(self.snapshot()), set(self.before))
@@ -45,7 +61,7 @@ class LocalIntegrationTests(SecretIntegrationFixture):
         self.assertFalse(self.remote_log.exists())
 
     def test_all_can_select_only_local_hosts(self):
-        self.assert_rekey_success(self.rekey(["--all"]))
+        self.assert_rekey_success(self.rekey(["--all", "--all-secrets"]))
         self.assertFalse(self.remote_log.exists())
 
     def test_identity_relative_to_local_home(self):
@@ -76,7 +92,7 @@ class LocalIntegrationTests(SecretIntegrationFixture):
         self.assertFalse(self.remote_log.exists())
 
     def test_dry_run_changes_nothing(self):
-        result = self.rekey(["--host", "localhost", "--dry-run"])
+        result = self.rekey(["--host", "localhost", "--all-secrets", "--dry-run"])
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("Processing", result.stdout)
         self.assertEqual(self.snapshot(), self.before)
@@ -94,14 +110,27 @@ class LocalIntegrationTests(SecretIntegrationFixture):
     def test_local_and_remote_hosts_combine_partial_results(self):
         wrong_public_key = (self.keys / "wrong.pub").read_text().strip()
         subprocess.run(
-            ["age", "--encrypt", "--recipient", wrong_public_key, "--output", str(self.other)],
-            input=b"unrelated secret\n", check=True,
+            [
+                "age",
+                "--encrypt",
+                "--recipient",
+                wrong_public_key,
+                "--output",
+                str(self.other),
+            ],
+            input=b"unrelated secret\n",
+            check=True,
         )
         self.before = self.snapshot()
-        self.settings["hosts"]["remote"] = {"target": "fixture", "identity": str(self.keys / "wrong")}
-        result = self.rekey(["--host", "localhost", "--host", "remote"])
+        self.settings["hosts"]["remote"] = {
+            "target": "fixture",
+            "identity": str(self.keys / "wrong"),
+        }
+        result = self.rekey(
+            ["--host", "localhost", "--host", "remote", "--all-secrets"]
+        )
         self.assert_rekey_success(result)
-        self.assertIn("Rekeyed: 1; unreadable: 1", result.stdout)
+        self.assertIn("Processed: 1; unreadable: 1", result.stdout)
         self.assertEqual(self.remote_log.read_text().count("mktemp -d"), 1)
 
     def test_local_flag_requires_boolean(self):
@@ -142,17 +171,26 @@ class LocalIntegrationTests(SecretIntegrationFixture):
         self.settings["mode"] = "edit"
         self.keys_file.write_text(f"[ {json.dumps(self.host_key)} ]\n")
         self.before = self.snapshot()
-        result = self.run_controller(args=[
-            "--host", "localhost", "nested/token.age",
-        ])
+        result = self.run_controller(
+            args=[
+                "--host",
+                "localhost",
+                "nested/token.age",
+            ]
+        )
         self.assert_success(result, b"edited secret\n")
         self.assertFalse(self.remote_log.exists())
 
     def test_read_can_use_a_local_host_with_clean_stdout(self):
         self.settings["mode"] = "read"
-        result = self.run_controller(interactive=False, args=[
-            "--host", "localhost", "nested/token.age",
-        ])
+        result = self.run_controller(
+            interactive=False,
+            args=[
+                "--host",
+                "localhost",
+                "nested/token.age",
+            ],
+        )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "original secret\n")
         self.assertIn("Processing localhost (local)", result.stderr)

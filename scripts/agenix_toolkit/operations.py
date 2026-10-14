@@ -63,22 +63,141 @@ def prepare_secret(
             config,
             rules.parent,
             {secret: temporary_rule},
+            action="Processed",
             diagnostics_to_stderr=reading,
         )
         # Native age recipients cannot be checked by agenix --check. Prove
         # temporary access by decrypting to /dev/null with this operation's key.
-        verified = run(
-            ["age", "--decrypt", "--identity", str(identity), "--output", os.devnull, str(encrypted)],
-            operation="Verify ephemeral access",
-            check=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        ).returncode == 0
+        verified = (
+            run(
+                [
+                    "age",
+                    "--decrypt",
+                    "--identity",
+                    str(identity),
+                    "--output",
+                    os.devnull,
+                    str(encrypted),
+                ],
+                operation="Verify ephemeral access",
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            ).returncode
+            == 0
+        )
     if not verified:
         raise RuntimeError(
             "Selected hosts could not prepare the secret; no local files were changed"
         )
     return access_rules, helper, encrypted, identity
+
+
+def prepare_secrets(
+    stage: Stage,
+    config: ToolkitConfig,
+    selected: Sequence[Host],
+    manifest: Manifest,
+) -> tuple[Path, Path, Path]:
+    """Grant a local identity temporary access to all secrets in the manifest."""
+    work, rules, worker = stage.work, config.rules, config.worker_source
+    if any(
+        not key.startswith(("ssh-ed25519 ", "ssh-rsa "))
+        for rule in manifest.values()
+        for key in rule.public_keys
+    ):
+        raise ValueError("Reading currently supports only SSH recipients")
+
+    # The private key is outside work, the only directory transferred to workers.
+    identity = work.parent / "ephemeral-identity"
+    run(
+        ["age-keygen", "--output", str(identity)],
+        operation="Generate ephemeral identity",
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+    identity.chmod(0o600)
+    public_key = run(
+        ["age-keygen", "-y", str(identity)],
+        operation="Derive ephemeral recipient",
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    temporary_manifest = {
+        name: rule.with_recipient(public_key) for name, rule in manifest.items()
+    }
+    access_rules = write_staged_rules(work, rules, temporary_manifest)
+    helper = stage.prepare_worker(worker, temporary_manifest)
+
+    verified = False
+    for host in selected:
+        if verified:
+            break
+        process_host(
+            work,
+            helper,
+            host,
+            config,
+            rules.parent,
+            temporary_manifest,
+            action="Processed",
+            diagnostics_to_stderr=True,
+        )
+        # Native age recipients cannot be checked by agenix --check. Prove
+        # temporary access by decrypting to /dev/null with this operation's key.
+        first_secret = next(iter(temporary_manifest))
+        encrypted = work / rules.parent / first_secret
+        verified = (
+            run(
+                [
+                    "age",
+                    "--decrypt",
+                    "--identity",
+                    str(identity),
+                    "--output",
+                    os.devnull,
+                    str(encrypted),
+                ],
+                operation="Verify ephemeral access",
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            ).returncode
+            == 0
+        )
+    if not verified:
+        raise RuntimeError(
+            "Selected hosts could not prepare the secrets; no local files were changed"
+        )
+    return access_rules, helper, identity
+
+
+def read_secrets(
+    stage: Stage,
+    config: ToolkitConfig,
+    selected: Sequence[Host],
+    manifest: Manifest,
+) -> int:
+    work = stage.work
+    access_rules, _, identity = prepare_secrets(stage, config, selected, manifest)
+    multiple = len(manifest) > 1
+    for secret in manifest:
+        if multiple:
+            print(f"==> {secret} <==", flush=True)
+        run(
+            ["agenix", "--decrypt", secret, "--identity", str(identity)],
+            operation=f"Read {secret}",
+            env={
+                **os.environ,
+                "AGENIX_RULES": str(work / access_rules),
+                "TMPDIR": str(work.parent),
+            },
+            check=True,
+        )
+        if multiple:
+            print(flush=True)  # blank line between secrets
+    return 0
 
 
 def read_secret(
@@ -88,17 +207,8 @@ def read_secret(
     secret: str,
     rule: SecretRule,
 ) -> int:
-    work = stage.work
-    access_rules, _, _, identity = prepare_secret(
-        stage, config, selected, secret, rule
-    )
-    run(
-        ["agenix", "--decrypt", secret, "--identity", str(identity)],
-        operation=f"Read {secret}",
-        env={**os.environ, "AGENIX_RULES": str(work / access_rules), "TMPDIR": str(work.parent)},
-        check=True,
-    )
-    return 0
+    """Single-secret read; delegates to read_secrets() for a shared code path."""
+    return read_secrets(stage, config, selected, {secret: rule})
 
 
 def edit_secret(
@@ -159,7 +269,7 @@ def edit_secret(
 
     # Always reencrypt, including when agenix skips an unchanged edit. Only this file is processed.
     recipients.write_text("\n".join(rule.public_keys) + "\n")
-    WorkerConfig((str(identity),), rules.parent).write(helper)
+    WorkerConfig((str(identity),), rules.parent, action="Processed").write(helper)
     run(
         [sys.executable, str(helper / "worker.py")],
         operation="Restore original recipients",
@@ -192,7 +302,9 @@ def rekey_secrets(
         return 0
     verified = False
     for host in selected:
-        process_host(work, helper, host, config, rules.parent, manifest)
+        process_host(
+            work, helper, host, config, rules.parent, manifest, action="Processed"
+        )
         if check_rules(work, check_rules_path):
             verified = True
             print(f"All recipients match the rules after {host.name}")

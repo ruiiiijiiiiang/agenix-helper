@@ -44,10 +44,11 @@ def run_host(
     rules_dir: Path,
     config: ToolkitConfig,
     diagnostics_to_stderr: bool,
+    action: str,
 ) -> Path:
     assert host.target is not None
     target = host.target
-    WorkerConfig(host.identity_paths, rules_dir).write(helper)
+    WorkerConfig(host.identity_paths, rules_dir, action).write(helper)
     result = run(
         ["ssh", target, "mktemp -d /tmp/agenix-toolkit.XXXXXXXX"],
         operation=f"Create staging directory on {target}",
@@ -105,6 +106,7 @@ def process_host(
     config: ToolkitConfig,
     rules_dir: Path,
     manifest: Manifest,
+    action: str,
     diagnostics_to_stderr: bool = False,
 ) -> None:
     target = "local" if host.local else host.target
@@ -114,14 +116,16 @@ def process_host(
         flush=True,
     )
     if host.local:
-        WorkerConfig(host.identity_paths, rules_dir).write(helper)
+        WorkerConfig(host.identity_paths, rules_dir, action).write(helper)
         run(
             [sys.executable, str(helper / "worker.py")],
             operation=f"Run local worker for {host.name}",
             stdout=sys.stderr if diagnostics_to_stderr else None,
         )
         return
-    returned = run_host(work, helper, host, rules_dir, config, diagnostics_to_stderr)
+    returned = run_host(
+        work, helper, host, rules_dir, config, diagnostics_to_stderr, action
+    )
     try:
         if config.mode.accessing:
             reject_symlinks(returned)

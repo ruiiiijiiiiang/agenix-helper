@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 
 from .config import Mode, ToolkitConfig, relative_path
-from .operations import edit_secret, read_secret, rekey_secrets
+from .operations import edit_secret, read_secrets, rekey_secrets
 from .rules import load_manifest
 from .staging import Stage, validate_sources
 
@@ -31,10 +31,28 @@ def parse_args(config: ToolkitConfig) -> tuple[argparse.Namespace, list[str]]:
     )
     parser.add_argument("--dry-run", action="store_true")
     if config.mode.accessing:
-        parser.description = f"{config.mode.value.capitalize()} one agenix secret with a temporary local recipient."
-        parser.add_argument(
-            "secret", help="Secret path relative to the rules directory"
-        )
+        if config.mode == Mode.READ:
+            parser.description = (
+                "Read one or more agenix secrets with a temporary local recipient."
+            )
+            parser.add_argument(
+                "secrets",
+                nargs="*",
+                metavar="SECRET",
+                help="Secret paths relative to the rules directory; omit to read all",
+            )
+            parser.add_argument(
+                "--all-secrets",
+                action="store_true",
+                help="Explicitly read every secret in the rules",
+            )
+        else:
+            parser.description = (
+                "Edit one agenix secret with a temporary local recipient."
+            )
+            parser.add_argument(
+                "secret", help="Secret path relative to the rules directory"
+            )
     else:
         parser.add_argument(
             "secrets",
@@ -48,11 +66,26 @@ def parse_args(config: ToolkitConfig) -> tuple[argparse.Namespace, list[str]]:
             help="Explicitly select every secret in the rules",
         )
     args = parser.parse_args()
-    if not config.mode.accessing and args.all_secrets and args.secrets:
-        parser.error("--all-secrets cannot be combined with secret paths")
-    requested = (
-        [args.secret] if config.mode.accessing else list(dict.fromkeys(args.secrets))
-    )
+    if config.mode == Mode.READ:
+        if args.all_secrets and args.secrets:
+            parser.error("--all-secrets cannot be combined with secret paths")
+        if not args.all_secrets and not args.secrets:
+            parser.error(
+                "Specify at least one secret, or pass --all-secrets to read all"
+            )
+    elif not config.mode.accessing:  # rekey
+        if args.all_secrets and args.secrets:
+            parser.error("--all-secrets cannot be combined with secret paths")
+        if not args.all_secrets and not args.secrets:
+            parser.error(
+                "Specify at least one secret, or pass --all-secrets to select all"
+            )
+    if config.mode == Mode.READ:
+        requested = list(dict.fromkeys(args.secrets))
+    elif config.mode == Mode.EDIT:
+        requested = [args.secret]
+    else:
+        requested = list(dict.fromkeys(args.secrets))
     for secret in requested:
         relative_path(secret)
         if not re.fullmatch(r"[A-Za-z0-9_./-]+", secret):
@@ -79,10 +112,10 @@ def main() -> int:
         Path(path) for host in selected if host.local for path in host.identity_paths
     ]
     if config.mode.accessing or local_identities:
-        validate_sources(
-            repo, config.sources, local_identities
-        )
-    with tempfile.TemporaryDirectory(prefix="agenix-toolkit.", dir="/tmp") as scratch_name:
+        validate_sources(repo, config.sources, local_identities)
+    with tempfile.TemporaryDirectory(
+        prefix="agenix-toolkit.", dir="/tmp"
+    ) as scratch_name:
         stage = Stage.create(repo, Path(scratch_name), config.sources)
         manifest = load_manifest(stage.work, config.rules, requested)
         print(
@@ -94,9 +127,10 @@ def main() -> int:
             print(f"Selected secrets: {' '.join(manifest)}", flush=True)
         if args.dry_run:
             return 0
-        if config.mode.accessing:
-            operation = read_secret if config.mode == Mode.READ else edit_secret
-            return operation(
+        if config.mode == Mode.READ:
+            return read_secrets(stage, config, selected, manifest)
+        if config.mode == Mode.EDIT:
+            return edit_secret(
                 stage,
                 config,
                 selected,

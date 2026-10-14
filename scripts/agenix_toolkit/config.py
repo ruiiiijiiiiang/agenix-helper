@@ -112,7 +112,9 @@ class ToolkitConfig:
         if not isinstance(hosts, dict):
             raise ValueError("Hosts must be an attribute set")
         if "publicKey" in value or "publicKeys" in value:
-            raise ValueError("publicKey/publicKeys are no longer supported; access uses an ephemeral age key")
+            raise ValueError(
+                "publicKey/publicKeys are no longer supported; access uses an ephemeral age key"
+            )
         python_ref = value.get("pythonRef", "nixpkgs#python3")
         age_ref = value.get("ageRef", "nixpkgs#age")
         if not all(isinstance(ref, str) and ref for ref in (python_ref, age_ref)):
@@ -149,6 +151,7 @@ class ToolkitConfig:
 class WorkerConfig:
     identity_paths: tuple[str, ...]
     rules_dir: Path
+    action: str
 
     @classmethod
     def load(cls, path: Path) -> "WorkerConfig":
@@ -157,7 +160,14 @@ class WorkerConfig:
             raise ValueError("Worker configuration must be an attribute set")
         paths = identity_paths(value, "Worker requires a nonempty identityPaths list")
         directory = value["rules_dir"]
-        return cls(paths, Path(".") if directory == "." else relative_path(directory))
+        action = value.get("action")
+        if not isinstance(action, str) or not action:
+            raise ValueError("Worker requires a nonempty action string")
+        return cls(
+            paths,
+            Path(".") if directory == "." else relative_path(directory),
+            action,
+        )
 
     def write(self, helper: Path) -> None:
         (helper / "config.json").write_text(
@@ -165,6 +175,7 @@ class WorkerConfig:
                 {
                     "identityPaths": list(self.identity_paths),
                     "rules_dir": str(self.rules_dir),
+                    "action": self.action,
                 }
             )
         )

@@ -59,20 +59,20 @@ Run from your secrets repository, or add `--repo /path/to/repo`:
 
 ```sh
 # Preview without contacting hosts or changing files.
-nix run .#rekey-secrets -- --host server --dry-run
+nix run .#rekey-secrets -- --host server --all-secrets --dry-run
 
 # Use a local key without SSH.
-nix run .#rekey-secrets -- --host localhost
+nix run .#rekey-secrets -- --host localhost --all-secrets
 
 # Try hosts in the given order, or all configured hosts in sorted order.
-nix run .#rekey-secrets -- --host server --host localhost
-nix run .#rekey-secrets -- --all
+nix run .#rekey-secrets -- --host server --host localhost --all-secrets
+nix run .#rekey-secrets -- --all --all-secrets
 
 # Rekey only selected secrets.
 nix run .#rekey-secrets -- --host server nested/token.age other.age
 ```
 
-Secret paths are relative to the rules file's directory and must name existing rules. Omit paths to rekey every secret, or request this explicitly with `--all-secrets`; it cannot be combined with paths. `--all` selects hosts, independently of secret selection.
+Secret paths are relative to the rules file's directory and must name existing rules. Specify secret paths to rekey specific secrets, or pass `--all-secrets` to rekey every secret. Omitting both secret paths and `--all-secrets` produces an error; `--all-secrets` cannot be combined with secret paths. `--all` selects hosts, independently of secret selection.
 
 Each host re-encrypts the staged files it can decrypt. Processing stops once `agenix --check` confirms every selected secret has the declared recipients. Only selected ciphertext is checked and copied back; unrelated missing secrets or recipient mismatches do not block targeted runs.
 
@@ -83,21 +83,27 @@ Before copying back, the app checks that local sources have not changed. Failure
 Run from your secrets repository; no local decryption identity is needed:
 
 ```sh
+# Read a single secret (plain decrypted bytes to stdout)
 nix run .#read-secret -- --host server nested/token.age
-nix run .#read-secret -- --all nested/token.age > /path/to/output
+
+# Read multiple secrets
+nix run .#read-secret -- --host server nested/token.age other.age
+
+# Read every secret in the rules
+nix run .#read-secret -- --all --all-secrets
 ```
 
-The app generates an ephemeral native age key pair and adds its public recipient to the staged rule. A selected host re-encrypts the secret, then the app verifies temporary access by decrypting to `/dev/null`, decrypts locally, and discards staging. The private key never enters the directory transferred to workers. Repository rules and ciphertext remain unchanged.
+The app generates an ephemeral native age key pair and adds its public recipient to the staged rule. A selected host re-encrypts the secrets in a single round-trip, then the app verifies temporary access by decrypting to `/dev/null`, decrypts locally, and discards staging. The private key never enters the directory transferred to workers. Repository rules and ciphertext remain unchanged.
 
 Local staging is created directly under `/tmp` (ignoring `TMPDIR`), with a `0700` directory and a `0600` private-key file. Normal completion, errors, and handled cancellation remove staging and the key. `SIGKILL` or power loss can leave artifacts; reboot clears them when `/tmp` is tmpfs, while disk-backed `/tmp` depends on system cleanup. The toolkit does not require `/tmp` to be tmpfs.
 
-Standard output contains only decrypted bytes; progress and diagnostics go to standard error. Piping and redirection are supported.
+When reading a single secret, standard output contains only decrypted bytes without headers. When reading multiple secrets or using `--all-secrets`, each secret is printed with a `==> path.age <==` header and separated by a blank line. Progress and diagnostics go to standard error. Piping and redirection are supported.
 
 Read and edit share these requirements:
 
 - Select local or SSH workers with repeated `--host` arguments, or use `--all`. A selected host must be able to decrypt the secret to grant access to the fresh ephemeral key.
-- Supply one secret path relative to the rules directory. Supported path characters are letters, numbers, underscores, dots, slashes, and hyphens.
-- Original recipients for the selected secret must still be SSH keys. The temporary native age recipient is verified through decryption; final original recipients are verified with `agenix --check`. Unrelated secrets' recipient mismatches do not block the operation.
+- Reading accepts one or more secret paths relative to the rules directory, or `--all-secrets` to read all secrets (omitting both produces an error). Editing accepts exactly one secret path. Supported path characters are letters, numbers, underscores, dots, slashes, and hyphens.
+- Original recipients for selected secrets must still be SSH keys. The temporary native age recipient is verified through decryption; final original recipients are verified with `agenix --check`. Unrelated secrets' recipient mismatches do not block the operation.
 - `--dry-run` evaluates the rule and checks paths without generating a key, contacting hosts, or decrypting anything.
 
 ## Edit
@@ -105,7 +111,11 @@ Read and edit share these requirements:
 Set `EDITOR` and run from an interactive terminal:
 
 ```sh
+# Edit using a specific host
 EDITOR=nvim nix run .#edit-secret -- --host server nested/token.age
+
+# Try all configured hosts in sorted order until one can decrypt
+EDITOR=nvim nix run .#edit-secret -- --all nested/token.age
 ```
 
 Editing uses the same temporary access workflow as reading, then opens the secret locally with `agenix --edit`. After the editor succeeds, the app uses the ephemeral identity to re-encrypt for the original recipients, verifies them, checks that sources have not changed, and atomically replaces only the selected `.age` file. This happens even if the editor made no changes. Rules and imported Nix files remain unchanged.

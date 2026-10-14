@@ -31,7 +31,7 @@ def reencrypt(
     armor: bool,
 ) -> None:
     descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f"{encrypted.name}.rekey.",
+        prefix=f"{encrypted.name}.process.",
         dir=encrypted.parent,
     )
     os.close(descriptor)
@@ -41,7 +41,7 @@ def reencrypt(
         if armor:
             encrypt.append("--armor")
         encrypt.extend(["--output", str(temporary)])
-        pipe([*decrypt, str(encrypted)], encrypt, operation=f"Rekey {encrypted.name}")
+        pipe([*decrypt, str(encrypted)], encrypt, operation=f"Process {encrypted.name}")
         os.chmod(temporary, stat.S_IMODE(encrypted.stat().st_mode))
         os.replace(temporary, encrypted)
     finally:
@@ -54,7 +54,7 @@ def worker_main(helper: Path) -> int:
     for identity in readable_identities(config):
         decrypt.extend(["--identity", str(identity)])
     recipients_dir = helper / "recipients"
-    rekeyed = skipped = 0
+    processed = skipped = 0
     for recipients in sorted(recipients_dir.rglob("*.age")):
         relative = recipients.relative_to(recipients_dir)
         encrypted = helper.parent / config.rules_dir / relative
@@ -72,6 +72,6 @@ def worker_main(helper: Path) -> int:
         reencrypt(
             encrypted, recipients, decrypt, (helper / "armor" / relative).exists()
         )
-        rekeyed += 1
-    print(f"Rekeyed: {rekeyed}; unreadable: {skipped}")
+        processed += 1
+    print(f"{config.action}: {processed}; unreadable: {skipped}")
     return 0
