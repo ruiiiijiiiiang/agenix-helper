@@ -2,6 +2,7 @@
 
 import json
 import shutil
+import socket
 import subprocess
 import unittest
 
@@ -60,9 +61,32 @@ class LocalIntegrationTests(SecretIntegrationFixture):
         self.assertIn("Processing localhost (local)", result.stdout)
         self.assertFalse(self.remote_log.exists())
 
-    def test_all_can_select_only_local_hosts(self):
-        self.assert_rekey_success(self.rekey(["--all", "--all-secrets"]))
+    def test_default_hosts_can_be_only_local(self):
+        self.assert_rekey_success(self.rekey(["--all-secrets"]))
         self.assertFalse(self.remote_log.exists())
+
+    def test_auto_matching_hostname_rekeys_without_ssh(self):
+        self.settings["hosts"] = {
+            socket.gethostname(): {
+                "local": "auto",
+                "target": "fixture",
+                "identity": str(self.keys / "host"),
+            },
+        }
+        self.assert_rekey_success(self.rekey(["--all-secrets"]))
+        self.assertFalse(self.remote_log.exists())
+
+    def test_auto_nonmatching_hostname_rekeys_over_ssh(self):
+        self.settings["hosts"] = {
+            "remote": {
+                "local": "auto",
+                "localHostname": "not-this-machine.invalid",
+                "target": "fixture",
+                "identity": str(self.keys / "host"),
+            },
+        }
+        self.assert_rekey_success(self.rekey(["--all-secrets"]))
+        self.assertEqual(self.remote_log.read_text().count("mktemp -d"), 1)
 
     def test_identity_relative_to_local_home(self):
         self.env["HOME"] = str(self.keys)
@@ -171,13 +195,7 @@ class LocalIntegrationTests(SecretIntegrationFixture):
         self.settings["mode"] = "edit"
         self.keys_file.write_text(f"[ {json.dumps(self.host_key)} ]\n")
         self.before = self.snapshot()
-        result = self.run_controller(
-            args=[
-                "--host",
-                "localhost",
-                "nested/token.age",
-            ]
-        )
+        result = self.run_controller(args=["nested/token.age"])
         self.assert_success(result, b"edited secret\n")
         self.assertFalse(self.remote_log.exists())
 
@@ -185,11 +203,7 @@ class LocalIntegrationTests(SecretIntegrationFixture):
         self.settings["mode"] = "read"
         result = self.run_controller(
             interactive=False,
-            args=[
-                "--host",
-                "localhost",
-                "nested/token.age",
-            ],
+            args=["nested/token.age"],
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "original secret\n")

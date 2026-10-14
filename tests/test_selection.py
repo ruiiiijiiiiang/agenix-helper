@@ -83,10 +83,48 @@ class RekeySelectionTests(SecretIntegrationFixture):
         self.assertIn("--all-secrets", result.stderr)
         self.assertEqual(self.snapshot(), self.before)
 
-    def test_all_hosts_and_one_secret_are_independent(self):
+    def test_default_hosts_and_one_secret_are_independent(self):
         self.assert_selected_success(
-            self.rekey("--all", "nested/token.age"), ["nested/token.age"]
+            self.rekey("nested/token.age"), ["nested/token.age"]
         )
+
+    def test_default_hosts_are_sorted(self):
+        result = self.rekey("--dry-run", "nested/token.age")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("hosts: fixture localhost unreadable", result.stdout)
+        self.assertFalse(self.remote_log.exists())
+
+    def test_explicit_hosts_preserve_order_and_deduplicate(self):
+        result = self.rekey(
+            "--host",
+            "localhost",
+            "--host",
+            "fixture",
+            "--host",
+            "localhost",
+            "--dry-run",
+            "nested/token.age",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("hosts: localhost fixture\n", result.stdout)
+        self.assertFalse(self.remote_log.exists())
+
+    def test_removed_all_flag_is_rejected(self):
+        for args in (("--all", "--all-secrets"), ("--all",)):
+            with self.subTest(args=args):
+                result = self.rekey(*args)
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("unrecognized arguments: --all", result.stderr)
+                self.assertEqual(self.snapshot(), self.before)
+                self.assertFalse(self.remote_log.exists())
+
+    def test_no_configured_hosts_errors(self):
+        self.settings["hosts"] = {}
+        result = self.rekey("nested/token.age")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("No hosts selected or configured", result.stderr)
+        self.assertEqual(self.snapshot(), self.before)
+        self.assertFalse(self.remote_log.exists())
 
     def test_unknown_secret_changes_nothing(self):
         result = self.rekey("--host", "fixture", "nested/token.age", "missing.age")

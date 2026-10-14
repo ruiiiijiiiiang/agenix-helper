@@ -351,7 +351,12 @@ class NixAppTests(unittest.TestCase):
             }};
             agenix.packages.fixture.default = "/fake/agenix";
             helpers = ((import {PROJECT}/flake.nix).outputs {{ inherit agenix; nixpkgs = {{}}; }}).lib;
-            args = {{ inherit pkgs; rules = "secrets/secrets.nix"; sources = [ "secrets" ]; hosts = {{}}; }};
+            args = {{
+              inherit pkgs;
+              rules = "secrets/secrets.nix";
+              sources = [ "secrets" ];
+              hosts.fixture = {{ target = "fixture"; identity = "/fake/key"; }};
+            }};
           in {{
             rekey = helpers.mkRekeyApp args;
             edit = helpers.mkEditApp args;

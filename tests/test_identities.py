@@ -151,8 +151,22 @@ class IdentityIntegrationTests(SecretIntegrationFixture):
 
 @unittest.skipUnless(shutil.which("nix-instantiate"), "Missing Nix evaluator")
 class NixIdentityDefaultsTests(unittest.TestCase):
-    def evaluate(self, host, configurations="{}", expected=None, *, combined=False):
-        expected_json = json.dumps({"fixture": expected or {}})
+    def evaluate(
+        self,
+        host=None,
+        configurations="{}",
+        expected=None,
+        *,
+        combined=False,
+        expected_hosts=None,
+        constructor="mkRekeyApp",
+    ):
+        expected_json = json.dumps(
+            expected_hosts
+            if expected_hosts is not None
+            else {"fixture": expected or {}}
+        )
+        host_argument = f"hosts.fixture = {host};" if host is not None else ""
         expression = f"""
           let
             expected = builtins.fromJSON {json.dumps(expected_json)};
@@ -177,10 +191,10 @@ class NixIdentityDefaultsTests(unittest.TestCase):
               inherit pkgs;
               rules = "secrets/secrets.nix";
               sources = [ "secrets" ];
-              hosts.fixture = {host};
+              {host_argument}
               nixosConfigurations = {configurations};
             }};
-          in helpers.{"mkApps" if combined else "mkRekeyApp"} args
+          in helpers.{"mkApps" if combined else constructor} args
         """
         return subprocess.run(
             ["nix-instantiate", "--eval", "--strict", "--json", "--expr", expression],
@@ -190,6 +204,71 @@ class NixIdentityDefaultsTests(unittest.TestCase):
 
     def assert_evaluates(self, result):
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_omitted_hosts_derive_all_configurations_for_every_constructor(self):
+        configurations = """
+          {
+            first.config = {
+              age.identityPaths = [ "/first-key" ];
+              unrelated = throw "must stay lazy";
+            };
+            second.config.age.identityPaths = [ "/second-key" ];
+          }
+        """
+        expected = {
+            "first": {"target": "root@first", "identityPaths": ["/first-key"]},
+            "second": {"target": "root@second", "identityPaths": ["/second-key"]},
+        }
+        for constructor in ("mkApps", "mkRekeyApp", "mkReadApp", "mkEditApp"):
+            with self.subTest(constructor=constructor):
+                self.assert_evaluates(
+                    self.evaluate(
+                        configurations=configurations,
+                        expected_hosts=expected,
+                        constructor=constructor,
+                    )
+                )
+
+    def test_explicit_hosts_remain_an_exact_subset(self):
+        self.assert_evaluates(
+            self.evaluate(
+                '{ target = "user@custom"; }',
+                '{ fixture.config.age.identityPaths = [ "/key" ]; excluded = throw "must stay lazy"; }',
+                {"target": "user@custom", "identityPaths": ["/key"]},
+            )
+        )
+
+    def test_omitted_hosts_require_nonempty_configurations(self):
+        result = self.evaluate()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("No hosts configured", result.stderr)
+
+    def test_explicit_empty_hosts_do_not_fall_back_to_configurations(self):
+        # Exercise the resolver directly to distinguish omitted hosts from {}.
+        expression = f"""
+          import {PROJECT}/lib/hosts.nix {{
+            hosts = {{}};
+            nixosConfigurations.fixture.config.age.identityPaths = [ "/key" ];
+          }}
+        """
+        result = subprocess.run(
+            ["nix-instantiate", "--eval", "--strict", "--expr", expression],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("No hosts configured", result.stderr)
+
+    def test_derived_host_requires_identity_paths(self):
+        for configuration, message in (
+            ("{ fixture.config = {}; }", "has no age.identityPaths"),
+            ("{ fixture.config.age.identityPaths = []; }", "nonempty list"),
+        ):
+            with self.subTest(configuration=configuration):
+                result = self.evaluate(configurations=configuration)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
 
     def test_defaults_from_matching_nixos_configuration(self):
         self.assert_evaluates(
@@ -206,6 +285,21 @@ class NixIdentityDefaultsTests(unittest.TestCase):
                 "{ local = true; }",
                 '{ fixture.config.age.identityPaths = [ "/key" ]; }',
                 {"local": True, "identityPaths": ["/key"]},
+                combined=True,
+            )
+        )
+
+    def test_auto_local_options_are_preserved_for_runtime_detection(self):
+        self.assert_evaluates(
+            self.evaluate(
+                '{ local = "auto"; localHostname = "framework"; target = "root@framework"; }',
+                '{ fixture.config.age.identityPaths = [ "/key" ]; }',
+                {
+                    "local": "auto",
+                    "localHostname": "framework",
+                    "target": "root@framework",
+                    "identityPaths": ["/key"],
+                },
                 combined=True,
             )
         )

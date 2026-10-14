@@ -100,7 +100,7 @@ class ReadIntegrationTests(SecretIntegrationFixture):
         self.assertIn("Rules:", result.stderr)
         self.assertFalse(self.remote_log.exists())
 
-    def test_all_tries_hosts_until_readable(self):
+    def test_default_tries_hosts_until_readable(self):
         self.settings["hosts"] = {
             "a-unreadable": self.settings["hosts"]["unreadable"],
             "z-fixture": self.settings["hosts"]["fixture"],
@@ -108,7 +108,6 @@ class ReadIntegrationTests(SecretIntegrationFixture):
         self.assert_read_success(
             self.read(
                 args=[
-                    "--all",
                     "nested/token.age",
                 ]
             )

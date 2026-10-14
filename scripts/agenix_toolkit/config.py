@@ -2,10 +2,11 @@
 
 import json
 import os
+import socket
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Mapping
 
 
 class Mode(str, Enum):
@@ -62,14 +63,28 @@ class Host:
     def from_json(cls, name: str, value: object) -> "Host":
         if not isinstance(value, dict):
             raise ValueError(f"Unknown or incomplete host: {name}")
-        local = value.get("local", False)
-        if not isinstance(local, bool):
-            raise ValueError(f"Host local flag must be a boolean: {name}")
+        local_mode = value.get("local", False)
+        automatic = local_mode == "auto"
+        if not isinstance(local_mode, bool) and not automatic:
+            raise ValueError(f"Host local flag must be a boolean or 'auto': {name}")
+        if "localHostname" in value and not automatic:
+            raise ValueError(f"Host localHostname requires local = 'auto': {name}")
         target = value.get("target")
-        if local and "target" in value:
+        if local_mode is True and "target" in value:
             raise ValueError(f"Local host must omit its SSH target: {name}")
-        if not local and (not isinstance(target, str) or not target):
+        if local_mode is not True and (not isinstance(target, str) or not target):
             raise ValueError(f"Unknown or incomplete host: {name}")
+        if automatic:
+            expected = value.get("localHostname", name)
+            if not isinstance(expected, str) or not expected.strip().rstrip("."):
+                raise ValueError(
+                    f"Host localHostname must be a nonempty string: {name}"
+                )
+            current = socket.gethostname().casefold().rstrip(".")
+            expected = expected.casefold().rstrip(".")
+            local = current == expected or current.split(".", 1)[0] == expected
+        else:
+            local = local_mode
         paths = identity_paths(
             value, f"Host {name} requires a nonempty identityPaths list or identity"
         )
@@ -129,16 +144,14 @@ class ToolkitConfig:
             age_ref,
         )
 
-    def select_hosts(
-        self, names: list[str] | None, all_hosts: bool
-    ) -> tuple[Host, ...]:
+    def select_hosts(self, names: list[str] | None) -> tuple[Host, ...]:
         selected = (
             sorted(self.host_definitions)
-            if all_hosts
-            else list(dict.fromkeys(names or []))
+            if names is None
+            else list(dict.fromkeys(names))
         )
         if not selected:
-            raise ValueError("No hosts selected")
+            raise ValueError("No hosts selected or configured")
         for name in selected:
             if name not in self.host_definitions:
                 raise ValueError(f"Unknown or incomplete host: {name}")

@@ -15,19 +15,16 @@ from .staging import Stage, validate_sources
 
 def parse_args(config: ToolkitConfig) -> tuple[argparse.Namespace, list[str]]:
     parser = argparse.ArgumentParser(
-        description="Rekey, edit, or read staged agenix secrets through selected hosts."
+        description="Rekey, edit, or read staged agenix secrets through selected hosts.",
+        allow_abbrev=False,
     )
     parser.add_argument("--repo", type=Path, default=Path.cwd())
-    selection = parser.add_mutually_exclusive_group(required=True)
-    selection.add_argument(
+    parser.add_argument(
         "--host",
         action="append",
         dest="hosts",
         metavar="NAME",
-        help="Host to use; repeat to try several",
-    )
-    selection.add_argument(
-        "--all", action="store_true", help="Try all configured hosts in sorted order"
+        help="Host to use; repeat to try several, or omit to try all configured hosts in sorted order",
     )
     parser.add_argument("--dry-run", action="store_true")
     if config.mode.accessing:
@@ -39,7 +36,7 @@ def parse_args(config: ToolkitConfig) -> tuple[argparse.Namespace, list[str]]:
                 "secrets",
                 nargs="*",
                 metavar="SECRET",
-                help="Secret paths relative to the rules directory; omit to read all",
+                help="Secret paths relative to the rules directory; use --all-secrets to read all",
             )
             parser.add_argument(
                 "--all-secrets",
@@ -58,7 +55,7 @@ def parse_args(config: ToolkitConfig) -> tuple[argparse.Namespace, list[str]]:
             "secrets",
             nargs="*",
             metavar="SECRET",
-            help="Secret paths relative to the rules directory; omit to select all",
+            help="Secret paths relative to the rules directory; use --all-secrets to select all",
         )
         parser.add_argument(
             "--all-secrets",
@@ -102,7 +99,7 @@ def main() -> int:
     )
     args, requested = parse_args(config)
     repo = args.repo.resolve(strict=True)
-    selected = config.select_hosts(args.hosts, args.all)
+    selected = config.select_hosts(args.hosts)
     for source in config.sources:
         if not (repo / source).exists():
             raise ValueError(f"Missing source: {source}")

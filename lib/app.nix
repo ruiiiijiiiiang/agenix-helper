@@ -8,7 +8,7 @@
   pkgs,
   rules,
   sources,
-  hosts,
+  hosts ? builtins.mapAttrs (hostname: _: { target = "root@${hostname}"; }) nixosConfigurations,
   nixosConfigurations ? { },
   name ? defaultName,
   ageRef ? "nixpkgs#age",

@@ -39,15 +39,53 @@ In flake-parts, assign to `apps` inside `perSystem`. Merge with existing apps us
 
 - `rules` and `sources` are relative to the repository used at runtime. Include the rules, imported Nix files, and encrypted files. Sources must contain regular files and directories without symlinks; local private keys must stay outside them.
 - Read/edit need no user decryption key. The `publicKey`, `publicKeys`, and local `--identity` options have been removed. Remove them from existing app configurations and commands. Secret rules still use `publicKeys` to declare their permanent recipients.
-- `hosts` defines available workers. Set `target` for SSH, or `local = true` for local execution without SSH. Worker identity paths refer to that host and use its executing user's permissions. Paths may be absolute, start with `~`, or be relative to that user's home.
+- `hosts` defines available workers. When omitted, every entry in `nixosConfigurations` becomes an SSH worker targeting `root@<attribute-name>`, using that configuration's `age.identityPaths`. These names must resolve through DNS or SSH configuration, and root SSH access must work. Explicit `hosts` selects exactly that set, without adding other NixOS configurations. Set `target` for a custom SSH user/address, or `local = true` for local execution without SSH. Worker identity paths refer to that host and use its executing user's permissions. Paths may be absolute, start with `~`, or be relative to that user's home.
 
-For multiple worker keys, replace `identity` with a nonempty list:
+To run a workstation locally when invoking the toolkit on that machine and use SSH from other machines, set `local = "auto"` with an SSH target:
+
+```nix
+hosts = {
+  workstation = {
+    local = "auto";
+    target = "root@workstation";
+  };
+  laptop = {
+    local = "auto";
+    target = "root@laptop";
+  };
+};
+```
+
+Automatic selection compares the runtime hostname with the host entry's name, ignoring case and a trailing dot. A local FQDN such as `workstation.example.com` also matches `workstation`. For aliases, set `localHostname = "workstation";`; an explicit FQDN override requires that full hostname. Detection uses the operating system hostname without DNS lookup. The SSH target is required even on a matching machine.
+
+Matching hosts validate and use their identity paths locally. Unreadable local keys produce an error without falling back to SSH. Other hosts keep their identity paths for the remote worker to resolve. `local = true` always runs locally and must omit `target`; `local = false` (the default) always uses SSH. `localHostname` is accepted only with `local = "auto"`. Automatically derived hosts remain SSH workers unless you explicitly declare them with automatic local selection.
+
+Use `identity` for a single worker key:
+
+```nix
+identity = "/etc/ssh/ssh_host_ed25519_key";
+```
+
+Or use `identityPaths` for a nonempty list of worker keys:
 
 ```nix
 identityPaths = [ "/etc/ssh/ssh_host_ed25519_key" "/path/to/another-key" ];
 ```
 
-Alternatively, pass `nixosConfigurations = self.nixosConfigurations;` to the constructor. Hosts then default to `nixosConfigurations.<host-name>.config.age.identityPaths`; explicit `identityPaths` takes precedence over `identity`, which takes precedence over these defaults. Host names must match configuration names. For aliases, set the paths explicitly, for example `identityPaths = self.nixosConfigurations.framework.config.age.identityPaths;`.
+To derive all hosts automatically, omit `hosts` and pass the configurations:
+
+```nix
+apps.${system} = inputs.agenix-toolkit.lib.mkApps {
+  inherit pkgs;
+  inherit (self) nixosConfigurations;
+  rules = "secrets/secrets.nix";
+  sources = [ "secrets" ];
+};
+```
+
+At least one host is required. Every derived host must have nonempty `age.identityPaths`; missing or empty paths fail evaluation. Explicit `hosts = { };` also fails instead of falling back to `nixosConfigurations`.
+
+You can also pass `nixosConfigurations = self.nixosConfigurations;` alongside explicit `hosts`. Their identity paths then default to `nixosConfigurations.<host-name>.config.age.identityPaths`; explicit `identityPaths` takes precedence over `identity`, which takes precedence over these defaults. Host names must match configuration names. For aliases, set the paths explicitly, for example `identityPaths = self.nixosConfigurations.workstation.config.age.identityPaths;`.
 
 Only identity path strings enter the app configuration. Defaults come from the supplied evaluated configuration, so keep them aligned with deployed hosts. Workers skip unreadable keys with diagnostics and fail if none are readable. These worker keys remain necessary to decrypt the original secrets.
 
@@ -66,13 +104,15 @@ nix run .#rekey-secrets -- --host localhost --all-secrets
 
 # Try hosts in the given order, or all configured hosts in sorted order.
 nix run .#rekey-secrets -- --host server --host localhost --all-secrets
-nix run .#rekey-secrets -- --all --all-secrets
+nix run .#rekey-secrets -- --all-secrets
 
 # Rekey only selected secrets.
 nix run .#rekey-secrets -- --host server nested/token.age other.age
 ```
 
-Secret paths are relative to the rules file's directory and must name existing rules. Specify secret paths to rekey specific secrets, or pass `--all-secrets` to rekey every secret. Omitting both secret paths and `--all-secrets` produces an error; `--all-secrets` cannot be combined with secret paths. `--all` selects hosts, independently of secret selection.
+Secret paths are relative to the rules file's directory and must name existing rules. Specify secret paths to rekey specific secrets, or pass `--all-secrets` to rekey every secret. Omitting both secret paths and `--all-secrets` produces an error; `--all-secrets` cannot be combined with secret paths. Omitting `--host` tries all configured hosts in sorted order; repeated `--host NAME` restricts selection and preserves the supplied order. Host selection is independent of secret selection. The former `--all` flag has been removed; remove it from existing commands and keep `--all-secrets` where needed.
+
+Selected hosts are validated before processing. Missing local identities, SSH failures, or worker errors abort the operation; connection failures are not skipped automatically.
 
 Each host re-encrypts the staged files it can decrypt. Processing stops once `agenix --check` confirms every selected secret has the declared recipients. Only selected ciphertext is checked and copied back; unrelated missing secrets or recipient mismatches do not block targeted runs.
 
@@ -90,7 +130,7 @@ nix run .#read-secret -- --host server nested/token.age
 nix run .#read-secret -- --host server nested/token.age other.age
 
 # Read every secret in the rules
-nix run .#read-secret -- --all --all-secrets
+nix run .#read-secret -- --all-secrets
 ```
 
 The app generates an ephemeral native age key pair and adds its public recipient to the staged rule. A selected host re-encrypts the secrets in a single round-trip, then the app verifies temporary access by decrypting to `/dev/null`, decrypts locally, and discards staging. The private key never enters the directory transferred to workers. Repository rules and ciphertext remain unchanged.
@@ -101,7 +141,7 @@ When reading a single secret, standard output contains only decrypted bytes with
 
 Read and edit share these requirements:
 
-- Select local or SSH workers with repeated `--host` arguments, or use `--all`. A selected host must be able to decrypt the secret to grant access to the fresh ephemeral key.
+- Omit `--host` to try all configured workers in sorted order, or restrict selection with repeated `--host NAME` arguments in the desired order. A selected host must be able to decrypt the secret to grant access to the fresh ephemeral key.
 - Reading accepts one or more secret paths relative to the rules directory, or `--all-secrets` to read all secrets (omitting both produces an error). Editing accepts exactly one secret path. Supported path characters are letters, numbers, underscores, dots, slashes, and hyphens.
 - Original recipients for selected secrets must still be SSH keys. The temporary native age recipient is verified through decryption; final original recipients are verified with `agenix --check`. Unrelated secrets' recipient mismatches do not block the operation.
 - `--dry-run` evaluates the rule and checks paths without generating a key, contacting hosts, or decrypting anything.
@@ -115,7 +155,7 @@ Set `EDITOR` and run from an interactive terminal:
 EDITOR=nvim nix run .#edit-secret -- --host server nested/token.age
 
 # Try all configured hosts in sorted order until one can decrypt
-EDITOR=nvim nix run .#edit-secret -- --all nested/token.age
+EDITOR=nvim nix run .#edit-secret -- nested/token.age
 ```
 
 Editing uses the same temporary access workflow as reading, then opens the secret locally with `agenix --edit`. After the editor succeeds, the app uses the ephemeral identity to re-encrypt for the original recipients, verifies them, checks that sources have not changed, and atomically replaces only the selected `.age` file. This happens even if the editor made no changes. Rules and imported Nix files remain unchanged.
