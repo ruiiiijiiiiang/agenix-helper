@@ -1,2 +1,7 @@
 { agenix }:
-args: import ./rekey.nix { inherit agenix; } (args // { mode = "edit"; })
+import ./app.nix {
+  inherit agenix;
+  mode = "edit";
+  defaultName = "agenix-toolkit-edit";
+  description = "Edit a staged agenix secret using a temporary recipient, then restore its original recipients";
+}

@@ -18,8 +18,10 @@ from test_edit import PROJECT, SecretIntegrationFixture
 class RuntimeBundleTests(SecretIntegrationFixture):
     def test_sigterm_while_editing_stops_editor_and_preserves_repository(self):
         editor_pid = self.root / "blocking-editor.pid"
+        identity_record = self.root / "identity-path"
         self.editor.write_text(
             "import os, pathlib, signal\n"
+            f"pathlib.Path({str(identity_record)!r}).write_text(str(pathlib.Path(os.environ['TMPDIR']).parent / 'ephemeral-identity'))\n"
             f"pathlib.Path({str(editor_pid)!r}).write_text(str(os.getpid()))\n"
             "signal.pause()\n"
         )
@@ -39,8 +41,6 @@ class RuntimeBundleTests(SecretIntegrationFixture):
                 "--host",
                 "fixture",
                 "nested/token.age",
-                "--identity",
-                str(self.keys / "editor"),
             ],
             stdin=slave,
             stdout=subprocess.PIPE,
@@ -57,6 +57,8 @@ class RuntimeBundleTests(SecretIntegrationFixture):
                 if time.monotonic() > deadline:
                     self.fail("Editor did not start")
                 time.sleep(0.01)
+            identity = Path(identity_record.read_text())
+            self.assertTrue(identity.is_file())
             pid = int(editor_pid.read_text())
             runner.send_signal(signal.SIGTERM)
             _, stderr = runner.communicate(timeout=10)
@@ -65,6 +67,7 @@ class RuntimeBundleTests(SecretIntegrationFixture):
                 os.kill(pid, 0)
             self.assertEqual(self.snapshot(), self.before)
             self.assertEqual(list(scratch.iterdir()), [])
+            self.assertFalse(identity.parent.exists())
         finally:
             os.close(slave)
             os.close(master)

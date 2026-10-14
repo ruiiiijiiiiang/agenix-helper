@@ -143,7 +143,7 @@ class LocalIntegrationTests(SecretIntegrationFixture):
         self.keys_file.write_text(f"[ {json.dumps(self.host_key)} ]\n")
         self.before = self.snapshot()
         result = self.run_controller(args=[
-            "--host", "localhost", "nested/token.age", "--identity", str(self.keys / "editor"),
+            "--host", "localhost", "nested/token.age",
         ])
         self.assert_success(result, b"edited secret\n")
         self.assertFalse(self.remote_log.exists())
@@ -151,7 +151,7 @@ class LocalIntegrationTests(SecretIntegrationFixture):
     def test_read_can_use_a_local_host_with_clean_stdout(self):
         self.settings["mode"] = "read"
         result = self.run_controller(interactive=False, args=[
-            "--host", "localhost", "nested/token.age", "--identity", str(self.keys / "editor"),
+            "--host", "localhost", "nested/token.age",
         ])
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "original secret\n")

@@ -69,30 +69,13 @@ class ReadIntegrationTests(SecretIntegrationFixture):
         result = self.read()
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(result.stdout, "")
-        self.assertIn("missing:", result.stderr)
         self.assertIn("Selected hosts could not prepare", result.stderr)
         self.assertEqual(self.snapshot(), self.before)
         self.assert_remote_cleanup()
 
-    def test_wrong_local_identity_fails_before_ssh(self):
-        result = self.read(identity=self.keys / "wrong")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(result.stdout, "")
-        self.assertFalse(self.remote_log.exists())
-        self.assertEqual(self.snapshot(), self.before)
-
-    def test_invalid_public_key_fails_before_ssh(self):
-        self.settings["publicKey"] = "invalid recipient"
-        result = self.read()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(result.stdout, "")
-        self.assertIn("publicKey must be", result.stderr)
-        self.assertFalse(self.remote_log.exists())
-        self.assertEqual(self.snapshot(), self.before)
-
     def test_unknown_secret_is_rejected(self):
         result = self.read(args=[
-            "--host", "fixture", "missing.age", "--identity", str(self.keys / "editor"),
+            "--host", "fixture", "missing.age",
         ])
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(result.stdout, "")
@@ -102,7 +85,7 @@ class ReadIntegrationTests(SecretIntegrationFixture):
 
     def test_dry_run_has_empty_stdout_and_no_ssh(self):
         result = self.read(args=[
-            "--host", "fixture", "--dry-run", "nested/token.age", "--identity", str(self.keys / "editor"),
+            "--host", "fixture", "--dry-run", "nested/token.age",
         ])
         self.assert_read_success(result, "")
         self.assertIn("Rules:", result.stderr)
@@ -114,20 +97,9 @@ class ReadIntegrationTests(SecretIntegrationFixture):
             "z-fixture": self.settings["hosts"]["fixture"],
         }
         self.assert_read_success(self.read(args=[
-            "--all", "nested/token.age", "--identity", str(self.keys / "editor"),
+            "--all", "nested/token.age",
         ]))
         self.assertEqual(self.remote_log.read_text().count("mktemp -d"), 2)
-
-    def test_already_prepared_secret_needs_no_ssh(self):
-        self.keys_file.write_text(f"[ {json.dumps(self.host_key)} {json.dumps(self.editor_key)} ]\n")
-        subprocess.run(
-            ["age", "--encrypt", "--recipient", self.host_key, "--recipient", self.editor_key,
-             "--output", str(self.secret)], input=b"original secret\n", check=True,
-        )
-        self.before = self.snapshot()
-        self.assert_read_success(self.read())
-        self.assertFalse(self.remote_log.exists())
-
 
 if __name__ == "__main__":
     unittest.main()

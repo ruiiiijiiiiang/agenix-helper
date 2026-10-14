@@ -35,9 +35,6 @@ def parse_args(config: ToolkitConfig) -> tuple[argparse.Namespace, list[str]]:
         parser.add_argument(
             "secret", help="Secret path relative to the rules directory"
         )
-        parser.add_argument(
-            "--identity", type=Path, required=True, help="Local private key path"
-        )
     else:
         parser.add_argument(
             "secrets",
@@ -78,19 +75,14 @@ def main() -> int:
             raise ValueError(f"Missing source: {source}")
     if not (repo / config.rules).is_file():
         raise ValueError(f"Missing rules: {config.rules}")
-    identity = None
-    if config.mode.accessing:
-        identity = args.identity.expanduser().resolve(strict=True)
-        if not identity.is_file() or not os.access(identity, os.R_OK):
-            raise ValueError(f"Unreadable local identity: {identity}")
     local_identities = [
         Path(path) for host in selected if host.local for path in host.identity_paths
     ]
     if config.mode.accessing or local_identities:
         validate_sources(
-            repo, config.sources, [*local_identities, *([identity] if identity else [])]
+            repo, config.sources, local_identities
         )
-    with tempfile.TemporaryDirectory(prefix="agenix-toolkit.") as scratch_name:
+    with tempfile.TemporaryDirectory(prefix="agenix-toolkit.", dir="/tmp") as scratch_name:
         stage = Stage.create(repo, Path(scratch_name), config.sources)
         manifest = load_manifest(stage.work, config.rules, requested)
         print(
@@ -103,9 +95,12 @@ def main() -> int:
         if args.dry_run:
             return 0
         if config.mode.accessing:
-            assert identity is not None
             operation = read_secret if config.mode == Mode.READ else edit_secret
             return operation(
-                stage, config, selected, args.secret, manifest[args.secret], identity
+                stage,
+                config,
+                selected,
+                args.secret,
+                manifest[args.secret],
             )
         return rekey_secrets(stage, config, selected, manifest, bool(requested))

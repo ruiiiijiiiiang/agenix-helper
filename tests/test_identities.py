@@ -106,7 +106,7 @@ class IdentityIntegrationTests(SecretIntegrationFixture):
         self.settings["mode"] = "read"
         self.env.pop("EDITOR", None)
         result = self.run_controller(interactive=False, args=[
-            "--host", "fixture", "other.age", "--identity", str(self.keys / "editor"),
+            "--host", "fixture", "other.age",
         ])
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "unrelated secret\n")
@@ -143,7 +143,6 @@ class NixIdentityDefaultsTests(unittest.TestCase):
               sources = [ "secrets" ];
               hosts.fixture = {host};
               nixosConfigurations = {configurations};
-              publicKey = "ssh-ed25519 fixture";
             }};
           in helpers.{'mkApps' if combined else 'mkRekeyApp'} args
         """

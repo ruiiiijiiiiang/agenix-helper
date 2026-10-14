@@ -90,7 +90,6 @@ class ToolkitConfig:
     sources: tuple[Path, ...]
     host_definitions: Mapping[str, object]
     worker_source: Path
-    public_key: str | None = None
     python_ref: str = "nixpkgs#python3"
     age_ref: str = "nixpkgs#age"
 
@@ -112,15 +111,20 @@ class ToolkitConfig:
         hosts = value["hosts"]
         if not isinstance(hosts, dict):
             raise ValueError("Hosts must be an attribute set")
-        public_key = value.get("publicKey")
-        if public_key is not None and not isinstance(public_key, str):
-            raise ValueError("publicKey must be a string")
+        if "publicKey" in value or "publicKeys" in value:
+            raise ValueError("publicKey/publicKeys are no longer supported; access uses an ephemeral age key")
         python_ref = value.get("pythonRef", "nixpkgs#python3")
         age_ref = value.get("ageRef", "nixpkgs#age")
         if not all(isinstance(ref, str) and ref for ref in (python_ref, age_ref)):
             raise ValueError("Package references must be nonempty strings")
         return cls(
-            mode, rules, sources, hosts, worker_source, public_key, python_ref, age_ref
+            mode,
+            rules,
+            sources,
+            hosts,
+            worker_source,
+            python_ref,
+            age_ref,
         )
 
     def select_hosts(

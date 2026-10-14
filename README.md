@@ -2,9 +2,9 @@
 
 Read, edit, and rekey agenix secrets using a local or remote host that can decrypt them, without copying host keys to your workstation. To use a remote host, your workstation must have SSH access to it as the user configured in `target`.
 
-**Private keys and plaintext never transfer between hosts.** Rekeying happens on the selected host. Reading and editing temporarily grant your local key access to staged ciphertext, then decrypt it on your workstation. Operations run only when invoked, independently of NixOS builds and deployments.
+**Private keys and plaintext never transfer between hosts.** Rekeying happens on the selected host. Reading and editing generate a fresh local age key for each operation, temporarily grant it access to staged ciphertext, then decrypt on your workstation. Operations run only when invoked, independently of NixOS builds and deployments.
 
-## Set up
+## Installation
 
 Add the flake input and expose all three apps with `lib.mkApps`:
 
@@ -22,15 +22,12 @@ Add the flake input and expose all three apps with `lib.mkApps`:
         inherit pkgs;
         rules = "secrets/secrets.nix";
         sources = [ "secrets" "lib/keys.nix" ];
-        publicKey = "ssh-ed25519 AAAA... your-key";
         hosts = {
           localhost = {
             local = true;
-            identity = ".ssh/id_ed25519";
           };
           server = {
             target = "user@server";
-            identity = ".ssh/id_ed25519";
           };
         };
       };
@@ -38,10 +35,10 @@ Add the flake input and expose all three apps with `lib.mkApps`:
 }
 ```
 
-In flake-parts, assign to `apps` inside `perSystem`. Merge with existing apps using `//`. To expose individual apps, use `lib.mkRekeyApp`, `lib.mkReadApp`, or `lib.mkEditApp` with the same configuration; `publicKey` is required only for read and edit.
+In flake-parts, assign to `apps` inside `perSystem`. Merge with existing apps using `//`. To expose individual apps, use `lib.mkRekeyApp`, `lib.mkReadApp`, or `lib.mkEditApp` with the same configuration.
 
 - `rules` and `sources` are relative to the repository used at runtime. Include the rules, imported Nix files, and encrypted files. Sources must contain regular files and directories without symlinks; local private keys must stay outside them.
-- `publicKey` is your local SSH Ed25519 or RSA public key. For read and edit, pass its matching private key path with `--identity`. Never put private key contents in Nix expressions.
+- Read/edit need no user decryption key. The `publicKey`, `publicKeys`, and local `--identity` options have been removed. Remove them from existing app configurations and commands. Secret rules still use `publicKeys` to declare their permanent recipients.
 - `hosts` defines available workers. Set `target` for SSH, or `local = true` for local execution without SSH. Worker identity paths refer to that host and use its executing user's permissions. Paths may be absolute, start with `~`, or be relative to that user's home.
 
 For multiple worker keys, replace `identity` with a nonempty list:
@@ -52,7 +49,7 @@ identityPaths = [ "/etc/ssh/ssh_host_ed25519_key" "/path/to/another-key" ];
 
 Alternatively, pass `nixosConfigurations = self.nixosConfigurations;` to the constructor. Hosts then default to `nixosConfigurations.<host-name>.config.age.identityPaths`; explicit `identityPaths` takes precedence over `identity`, which takes precedence over these defaults. Host names must match configuration names. For aliases, set the paths explicitly, for example `identityPaths = self.nixosConfigurations.framework.config.age.identityPaths;`.
 
-Only identity path strings enter the app configuration. Defaults come from the supplied evaluated configuration, so keep them aligned with deployed hosts. Workers skip unreadable keys with diagnostics and fail if none are readable. These worker keys are independent of read/edit's local `--identity` key.
+Only identity path strings enter the app configuration. Defaults come from the supplied evaluated configuration, so keep them aligned with deployed hosts. Workers skip unreadable keys with diagnostics and fail if none are readable. These worker keys remain necessary to decrypt the original secrets.
 
 SSH hosts need `nix`, `tar`, and `mktemp`. The worker obtains Python and age through `nix shell`; override their package references with `pythonRef` and `ageRef` if needed. Local workers use the app's bundled runtime.
 
@@ -83,35 +80,37 @@ Before copying back, the app checks that local sources have not changed. Failure
 
 ## Read
 
-Pass the local private key matching the configured `publicKey`:
+Run from your secrets repository; no local decryption identity is needed:
 
 ```sh
-nix run .#read-secret -- --host server --identity ~/.ssh/id_ed25519 nested/token.age
-nix run .#read-secret -- --all --identity ~/.ssh/id_ed25519 nested/token.age > /path/to/output
+nix run .#read-secret -- --host server nested/token.age
+nix run .#read-secret -- --all nested/token.age > /path/to/output
 ```
 
-The app verifies your local key pair, temporarily adds your public key to the staged secret's recipients, and asks a selected host to re-encrypt it. It then decrypts locally and discards staging. Repository rules and ciphertext remain unchanged.
+The app generates an ephemeral native age key pair and adds its public recipient to the staged rule. A selected host re-encrypts the secret, then the app verifies temporary access by decrypting to `/dev/null`, decrypts locally, and discards staging. The private key never enters the directory transferred to workers. Repository rules and ciphertext remain unchanged.
 
-Standard output contains only decrypted bytes; progress and diagnostics go to standard error. Piping and redirection are supported. Encrypted private keys may require a terminal for their passphrase.
+Local staging is created directly under `/tmp` (ignoring `TMPDIR`), with a `0700` directory and a `0600` private-key file. Normal completion, errors, and handled cancellation remove staging and the key. `SIGKILL` or power loss can leave artifacts; reboot clears them when `/tmp` is tmpfs, while disk-backed `/tmp` depends on system cleanup. The toolkit does not require `/tmp` to be tmpfs.
+
+Standard output contains only decrypted bytes; progress and diagnostics go to standard error. Piping and redirection are supported.
 
 Read and edit share these requirements:
 
-- Select local or SSH workers with repeated `--host` arguments, or use `--all`. A selected host must be able to decrypt the secret unless it already matches the temporary recipient list.
+- Select local or SSH workers with repeated `--host` arguments, or use `--all`. A selected host must be able to decrypt the secret to grant access to the fresh ephemeral key.
 - Supply one secret path relative to the rules directory. Supported path characters are letters, numbers, underscores, dots, slashes, and hyphens.
-- All recipients for the selected secret must be SSH keys; agenix's recipient checker does not support native age recipients. Unrelated secrets' recipient mismatches do not block the operation.
-- `--dry-run` evaluates the rule and checks paths and private key readability, without contacting hosts, verifying the key pair, or decrypting anything.
+- Original recipients for the selected secret must still be SSH keys. The temporary native age recipient is verified through decryption; final original recipients are verified with `agenix --check`. Unrelated secrets' recipient mismatches do not block the operation.
+- `--dry-run` evaluates the rule and checks paths without generating a key, contacting hosts, or decrypting anything.
 
 ## Edit
 
 Set `EDITOR` and run from an interactive terminal:
 
 ```sh
-EDITOR=nvim nix run .#edit-secret -- --host server --identity ~/.ssh/id_ed25519 nested/token.age
+EDITOR=nvim nix run .#edit-secret -- --host server nested/token.age
 ```
 
-Editing uses the same temporary access workflow as reading, then opens the secret locally with `agenix --edit`. After the editor succeeds, the app re-encrypts for the original recipients, verifies them, checks that sources have not changed, and atomically replaces only the selected `.age` file. This happens even if the editor made no changes. Rules and imported Nix files remain unchanged.
+Editing uses the same temporary access workflow as reading, then opens the secret locally with `agenix --edit`. After the editor succeeds, the app uses the ephemeral identity to re-encrypt for the original recipients, verifies them, checks that sources have not changed, and atomically replaces only the selected `.age` file. This happens even if the editor made no changes. Rules and imported Nix files remain unchanged.
 
-Editor failures, verification failures, source changes, or cancellation before replacement discard staged changes. Forceful termination can leave temporary artifacts, and editors may retain backups. Removing the temporary recipient does not revoke access to intermediate copies; if your key was an original recipient, it remains one.
+Editor failures, verification failures, source changes, or cancellation before replacement discard staged changes. Forceful termination can leave temporary artifacts, and editors may retain backups. Removing the temporary recipient does not revoke access to intermediate copies; original recipients retain their existing access.
 
 ## Development
 

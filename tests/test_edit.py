@@ -12,7 +12,7 @@ from pathlib import Path
 
 
 PROJECT = Path(__file__).resolve().parents[1]
-TOOLS = ("age", "agenix", "nix-instantiate", "ssh-keygen", "tar")
+TOOLS = ("age-keygen", "age", "agenix", "nix-instantiate", "ssh-keygen", "tar")
 
 
 @unittest.skipUnless(all(shutil.which(tool) for tool in TOOLS), "Missing integration tools")
@@ -57,7 +57,6 @@ class SecretIntegrationFixture(unittest.TestCase):
         self.controller = PROJECT / "scripts/controller.py"
         self.settings = {
             "mode": "edit",
-            "publicKey": self.editor_key,
             "rules": "secrets/secrets.nix",
             "sources": ["secrets", "keys.nix"],
             "hosts": {
@@ -111,10 +110,10 @@ class SecretIntegrationFixture(unittest.TestCase):
     def snapshot(self):
         return {str(p.relative_to(self.repo)): p.read_bytes() for p in self.repo.rglob("*") if p.is_file()}
 
-    def run_controller(self, *, mode="change", identity=None, interactive=True, args=None, binary=False):
+    def run_controller(self, *, mode="change", interactive=True, args=None, binary=False):
         self.config.write_text(json.dumps(self.settings))
         command = [sys.executable, str(self.controller), "--repo", str(self.repo)]
-        command += args or ["--host", "fixture", "nested/token.age", "--identity", str(identity or self.keys / "editor")]
+        command += args or ["--host", "fixture", "nested/token.age"]
         self.env["TEST_EDITOR_MODE"] = mode
         master, slave = pty.openpty()
         try:
@@ -178,12 +177,6 @@ class EditIntegrationTests(SecretIntegrationFixture):
         self.assertEqual(self.secret.read_bytes(), self.before["secrets/nested/token.age"])
         self.assertEqual(self.rules.read_text(), "external change\n")
 
-    def test_wrong_local_identity_fails_before_ssh(self):
-        result = self.run_controller(identity=self.keys / "wrong")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertFalse(self.remote_log.exists())
-        self.assertEqual(self.snapshot(), self.before)
-
     def test_unreadable_host_preserves_repository(self):
         self.settings["hosts"]["fixture"]["identity"] = str(self.keys / "wrong")
         result = self.run_controller()
@@ -193,7 +186,6 @@ class EditIntegrationTests(SecretIntegrationFixture):
     def test_tries_next_host(self):
         self.assert_success(self.run_controller(args=[
             "--host", "unreadable", "--host", "fixture", "nested/token.age",
-            "--identity", str(self.keys / "editor"),
         ]), b"edited secret\n")
         self.assertEqual(self.remote_log.read_text().count("mktemp -d"), 2)
 
@@ -206,21 +198,11 @@ class EditIntegrationTests(SecretIntegrationFixture):
 
     def test_dry_run_does_not_contact_hosts(self):
         result = self.run_controller(interactive=False, args=[
-            "--host", "fixture", "--dry-run", "nested/token.age", "--identity", str(self.keys / "editor"),
+            "--host", "fixture", "--dry-run", "nested/token.age",
         ])
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse(self.remote_log.exists())
         self.assertEqual(self.snapshot(), self.before)
-
-    def test_private_identity_inside_sources_is_rejected(self):
-        identity = self.repo / "secrets/private-key"
-        shutil.copy2(self.keys / "editor", identity)
-        before = self.snapshot()
-        result = self.run_controller(identity=identity)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("outside sources", result.stderr)
-        self.assertFalse(self.remote_log.exists())
-        self.assertEqual(self.snapshot(), before)
 
     def test_symlink_is_rejected(self):
         self.secret.unlink()
@@ -233,7 +215,7 @@ class EditIntegrationTests(SecretIntegrationFixture):
 
     def test_unknown_secret_is_rejected(self):
         result = self.run_controller(args=[
-            "--host", "fixture", "missing.age", "--identity", str(self.keys / "editor"),
+            "--host", "fixture", "missing.age",
         ])
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Unknown secret", result.stderr)
@@ -289,9 +271,9 @@ class NixAppTests(unittest.TestCase):
             args = {{ inherit pkgs; rules = "secrets/secrets.nix"; sources = [ "secrets" ]; hosts = {{}}; }};
           in {{
             rekey = helpers.mkRekeyApp args;
-            edit = helpers.mkEditApp (args // {{ publicKey = "ssh-ed25519 fixture"; }});
-            read = helpers.mkReadApp (args // {{ publicKey = "ssh-ed25519 fixture"; }});
-            combined = helpers.mkApps (args // {{ publicKey = "ssh-ed25519 fixture"; }});
+            edit = helpers.mkEditApp args;
+            read = helpers.mkReadApp args;
+            combined = helpers.mkApps args;
           }}
         """
         result = self.evaluate(expression)

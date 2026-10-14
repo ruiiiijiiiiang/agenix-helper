@@ -3,8 +3,8 @@
 import filecmp
 import json
 import os
-import re
 import shlex
+import subprocess
 import sys
 from pathlib import Path
 from typing import Sequence
@@ -22,51 +22,37 @@ def prepare_secret(
     selected: Sequence[Host],
     secret: str,
     rule: SecretRule,
-    identity: Path,
-) -> tuple[Path, Path, Path]:
+) -> tuple[Path, Path, Path, Path]:
     """Grant a local identity temporary access to one staged encrypted secret."""
     work, rules, worker = stage.work, config.rules, config.worker_source
     reading = config.mode == Mode.READ
-    public_key = config.public_key
-    if not isinstance(public_key, str) or not re.fullmatch(
-        r"ssh-(?:ed25519|rsa) [A-Za-z0-9+/=]+(?: [^\r\n\x00]*)?", public_key
-    ):
-        raise ValueError("publicKey must be an SSH Ed25519 or RSA public key")
     if any(
         not key.startswith(("ssh-ed25519 ", "ssh-rsa ")) for key in rule.public_keys
     ):
         raise ValueError("Editing and reading currently support only SSH recipients")
 
-    # Check the key pair before SSH without staging the private key or any secret plaintext.
-    challenge = work.parent / "key-check.age"
+    # The private key is outside work, the only directory transferred to workers.
+    identity = work.parent / "ephemeral-identity"
     run(
-        ["age", "--encrypt", "--recipient", public_key, "--output", str(challenge)],
-        operation="Validate public key",
-        input=b"agenix-toolkit key check\n",
-        check=True,
+        ["age-keygen", "--output", str(identity)],
+        operation="Generate ephemeral identity",
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
     )
-    run(
-        [
-            "age",
-            "--decrypt",
-            "--identity",
-            str(identity),
-            "--output",
-            os.devnull,
-            str(challenge),
-        ],
-        operation="Validate local key pair",
-        check=True,
-    )
-    challenge.unlink()
-
+    identity.chmod(0o600)
+    public_key = run(
+        ["age-keygen", "-y", str(identity)],
+        operation="Derive ephemeral recipient",
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
     temporary_rule = rule.with_recipient(public_key)
     access_rules = write_staged_rules(work, rules, {secret: temporary_rule})
     helper = stage.prepare_worker(worker, {secret: temporary_rule})
 
     relative = rules.parent / secret
     encrypted = work / relative
-    verified = check_rules(work, access_rules)
+    verified = False
     for host in selected:
         if verified:
             break
@@ -79,13 +65,20 @@ def prepare_secret(
             {secret: temporary_rule},
             diagnostics_to_stderr=reading,
         )
-        verified = check_rules(work, access_rules)
+        # Native age recipients cannot be checked by agenix --check. Prove
+        # temporary access by decrypting to /dev/null with this operation's key.
+        verified = run(
+            ["age", "--decrypt", "--identity", str(identity), "--output", os.devnull, str(encrypted)],
+            operation="Verify ephemeral access",
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        ).returncode == 0
     if not verified:
-        check_rules(work, access_rules, show_output=True, diagnostics_to_stderr=reading)
         raise RuntimeError(
             "Selected hosts could not prepare the secret; no local files were changed"
         )
-    return access_rules, helper, encrypted
+    return access_rules, helper, encrypted, identity
 
 
 def read_secret(
@@ -94,14 +87,15 @@ def read_secret(
     selected: Sequence[Host],
     secret: str,
     rule: SecretRule,
-    identity: Path,
 ) -> int:
     work = stage.work
-    access_rules, _, _ = prepare_secret(stage, config, selected, secret, rule, identity)
+    access_rules, _, _, identity = prepare_secret(
+        stage, config, selected, secret, rule
+    )
     run(
         ["agenix", "--decrypt", secret, "--identity", str(identity)],
         operation=f"Read {secret}",
-        env={**os.environ, "AGENIX_RULES": str(work / access_rules)},
+        env={**os.environ, "AGENIX_RULES": str(work / access_rules), "TMPDIR": str(work.parent)},
         check=True,
     )
     return 0
@@ -113,7 +107,6 @@ def edit_secret(
     selected: Sequence[Host],
     secret: str,
     rule: SecretRule,
-    identity: Path,
 ) -> int:
     work, rules = stage.work, config.rules
     repo = stage.repo
@@ -123,8 +116,8 @@ def edit_secret(
         )
     if not os.environ.get("EDITOR") or os.environ["EDITOR"] == ":":
         raise ValueError("Set EDITOR to the editor to use")
-    edit_rules, helper, encrypted = prepare_secret(
-        stage, config, selected, secret, rule, identity
+    edit_rules, helper, encrypted, identity = prepare_secret(
+        stage, config, selected, secret, rule
     )
     relative = rules.parent / secret
     recipients = helper / "recipients" / secret
