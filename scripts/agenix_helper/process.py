@@ -6,13 +6,30 @@ import signal
 import subprocess
 import sys
 import time
+from collections.abc import Callable, Iterator, Sequence
+from concurrent.futures import CancelledError
 from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
-from typing import Any, Callable, Iterator, Sequence
+from threading import Event
+from typing import Any
 
 
 class CommandError(RuntimeError):
     """An external command failed without committing staged results."""
+
+    def __init__(self, message: str, *, failed_commands=()):
+        super().__init__(message)
+        self.failed_commands = failed_commands
+
+
+cancellation: ContextVar[Event | None] = ContextVar("cancellation", default=None)
+
+
+def check_cancelled() -> None:
+    event = cancellation.get()
+    if event is not None and event.is_set():
+        raise CancelledError()
 
 
 def interrupt(signum: int, frame: object) -> None:
@@ -35,6 +52,7 @@ def stop(child: subprocess.Popen) -> None:
 
 @contextmanager
 def spawn(command: Sequence[str], **options: Any) -> Iterator[subprocess.Popen]:
+    check_cancelled()
     child = subprocess.Popen(list(command), **options)
     try:
         yield child
@@ -54,12 +72,22 @@ def run(
     if options.pop("capture_output", False):
         options["stdout"] = options["stderr"] = subprocess.PIPE
     with spawn(command, **options) as child:
-        stdout, stderr = child.communicate(input_data)
+        while True:
+            check_cancelled()
+            try:
+                stdout, stderr = child.communicate(input_data, timeout=0.1)
+                break
+            except subprocess.TimeoutExpired:
+                # communicate retains buffered input/output across retries.
+                input_data = None
         result = subprocess.CompletedProcess(
             list(command), child.returncode, stdout, stderr
         )
     if check and result.returncode:
-        raise CommandError(f"{operation} failed (exit status {result.returncode})")
+        raise CommandError(
+            f"{operation} failed (exit status {result.returncode})",
+            failed_commands=((tuple(command), result.returncode),),
+        )
     return result
 
 
@@ -76,12 +104,29 @@ def pipe(
             consumer, stdin=source.stdout, stdout=consumer_stdout
         ) as destination:
             source.stdout.close()
-            destination_status = destination.wait()
-        source_status = source.wait()
+            destination_status = wait_child(destination)
+        source_status = wait_child(source)
     if source_status or destination_status:
         raise CommandError(
-            f"{operation} failed (producer status {source_status}, consumer status {destination_status})"
+            f"{operation} failed (producer status {source_status}, consumer status {destination_status})",
+            failed_commands=tuple(
+                (tuple(command), status)
+                for command, status in (
+                    (producer, source_status),
+                    (consumer, destination_status),
+                )
+                if status
+            ),
         )
+
+
+def wait_child(child: subprocess.Popen) -> int:
+    while True:
+        check_cancelled()
+        try:
+            return child.wait(timeout=0.1)
+        except subprocess.TimeoutExpired:
+            pass
 
 
 def entrypoint(main: Callable[[], int]) -> int:

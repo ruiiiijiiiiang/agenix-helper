@@ -22,6 +22,7 @@ Add the flake input and expose all three apps with `lib.mkApps`:
         inherit pkgs;
         rules = "secrets/secrets.nix";
         sources = [ "secrets" "lib/keys.nix" ];
+        maxConcurrency = 10; # Optional; maximum number of host workers at once.
         hosts = {
           localhost = {
             local = true;
@@ -91,6 +92,12 @@ Only identity path strings enter the app configuration. Defaults come from the s
 
 SSH hosts need `nix`, `tar`, and `mktemp`. The worker obtains Python and age through `nix shell`; override their package references with `pythonRef` and `ageRef` if needed. Local workers use the app's bundled runtime.
 
+All app constructors accept `maxConcurrency`, a positive integer defaulting to `10`. Override it per invocation with `--max-concurrency COUNT`; use `1` to process hosts sequentially. Each selected host receives its own copy of the staged files, and results are merged as hosts finish. All selected hosts are attempted; output keeps the requested secret order regardless of worker completion order. The concurrency limit includes local workers.
+
+SSH connection failures (exit status `255`, including authentication failures and dropped connections during transfers) produce a warning and skip that host. SSH uses noninteractive authentication, a 10-second connection timeout, and keepalive probes to detect lost connections. Configure working SSH keys or an agent before running the helper. Worker failures, invalid results, and local identity errors still fail the operation. Remote cleanup is attempted after staging is created; if the host becomes unreachable, remote temporary ciphertext may remain until the host's `/tmp` cleanup.
+
+Each remote attempt uses up to five SSH invocations: create the temporary directory, upload files, run the worker, download results, and remove the temporary directory. A host unreachable during initial connection uses only the first invocation. Local workers use no SSH.
+
 ## Rekey
 
 Run from your secrets repository, or add `--repo /path/to/repo`:
@@ -102,7 +109,7 @@ nix run .#agenix-rekey -- --host server --all-secrets --dry-run
 # Use a local key without SSH.
 nix run .#agenix-rekey -- --host localhost --all-secrets
 
-# Try hosts in the given order, or all configured hosts in sorted order.
+# Select specific hosts, or all configured hosts.
 nix run .#agenix-rekey -- --host server --host localhost --all-secrets
 nix run .#agenix-rekey -- --all-secrets
 
@@ -110,11 +117,11 @@ nix run .#agenix-rekey -- --all-secrets
 nix run .#agenix-rekey -- --host server nested/token.age other.age
 ```
 
-Secret paths are relative to the rules file's directory and must name existing rules. Specify secret paths to rekey specific secrets, or pass `--all-secrets` to rekey every secret. Omitting both secret paths and `--all-secrets` produces an error; `--all-secrets` cannot be combined with secret paths. Omitting `--host` tries all configured hosts in sorted order; repeated `--host NAME` restricts selection and preserves the supplied order. Host selection is independent of secret selection. The former `--all` flag has been removed; remove it from existing commands and keep `--all-secrets` where needed.
+Secret paths are relative to the rules file's directory and must name existing rules. Specify secret paths to rekey specific secrets, or pass `--all-secrets` to rekey every secret. Omitting both secret paths and `--all-secrets` produces an error; `--all-secrets` cannot be combined with secret paths. Omitting `--host` selects all configured hosts in sorted order; repeated `--host NAME` restricts selection and preserves submission order. Host workers run concurrently, so completion order may differ. Host selection is independent of secret selection. The former `--all` flag has been removed; remove it from existing commands and keep `--all-secrets` where needed.
 
-Selected hosts are validated before processing. Missing local identities, SSH failures, or worker errors abort the operation; connection failures are not skipped automatically.
+Selected hosts are validated before processing. Missing local identities and worker errors abort the operation. SSH connection failures skip the affected host with a warning.
 
-Each host re-encrypts the staged files it can decrypt. Processing stops once `agenix --check` confirms every selected secret has the declared recipients. Only selected ciphertext is checked and copied back; unrelated missing secrets or recipient mismatches do not block targeted runs.
+Each host re-encrypts its independent copies of the files it can decrypt. After merging results, `agenix --check` must confirm every selected secret has the declared recipients before any repository files are updated. Only selected ciphertext is checked and copied back; unrelated missing secrets or recipient mismatches do not block targeted runs.
 
 Before copying back, the app checks that local sources have not changed. Failures before this copy leave the repository untouched; a failure during the copy can leave some files updated. Failed SSH cleanup may leave encrypted files in a remote temporary directory. Review the diff before committing or deploying; the app does neither automatically.
 
@@ -135,7 +142,7 @@ nix run .#agenix-read -- --all-secrets
 
 With `--all-secrets`, the app prints every secret that the selected hosts can decrypt and reports the number skipped on standard error. For example, `--host server --all-secrets` reads only secrets accessible to that server. Multiple hosts contribute their accessible secrets. If no secrets are readable, the command fails with empty standard output. Explicit secret paths require every requested secret to be readable before any plaintext is printed.
 
-The app generates an ephemeral native age key pair and adds its public recipient to the staged rules. Each selected host re-encrypts the secrets it can decrypt in a single round-trip. The app verifies temporary access for every secret by decrypting to `/dev/null`, tries further hosts while secrets remain inaccessible, decrypts the readable secrets locally, and discards staging. The private key never enters the directory transferred to workers. Repository rules and ciphertext remain unchanged.
+The app generates an ephemeral native age key pair and adds its public recipient to the staged rules. Each selected host independently re-encrypts the secrets it can decrypt in one worker run. As results arrive, the app verifies temporary access for every candidate secret by decrypting to `/dev/null` and merges verified ciphertext. It then decrypts the readable secrets locally and discards staging. The private key never enters any directory transferred to workers. Repository rules and ciphertext remain unchanged.
 
 Local staging is created directly under `/tmp` (ignoring `TMPDIR`), with a `0700` directory and a `0600` private-key file. Normal completion, errors, and handled cancellation remove staging and the key. `SIGKILL` or power loss can leave artifacts; reboot clears them when `/tmp` is tmpfs, while disk-backed `/tmp` depends on system cleanup. The helper does not require `/tmp` to be tmpfs.
 
@@ -143,7 +150,7 @@ When reading a single secret, standard output contains only decrypted bytes with
 
 Read and edit share these requirements:
 
-- Omit `--host` to try all configured workers in sorted order, or restrict selection with repeated `--host NAME` arguments in the desired order. A selected host must be able to decrypt the secret to grant access to the fresh ephemeral key.
+- Omit `--host` to select all configured workers, or restrict selection with repeated `--host NAME` arguments. Workers run concurrently up to `maxConcurrency` or `--max-concurrency`. At least one reachable selected host must be able to decrypt each required secret to grant access to the fresh ephemeral key.
 - Reading accepts one or more secret paths relative to the rules directory, or `--all-secrets` to read all secrets (omitting both produces an error). Editing accepts exactly one secret path. Supported path characters are letters, numbers, underscores, dots, slashes, and hyphens.
 - Original recipients for selected secrets must still be SSH keys. The temporary native age recipient is verified through decryption; final original recipients are verified with `agenix --check`. Unrelated secrets' recipient mismatches do not block the operation.
 - `--dry-run` evaluates the rule and checks paths without generating a key, contacting hosts, or decrypting anything.
@@ -156,7 +163,7 @@ Set `EDITOR` and run from an interactive terminal:
 # Edit using a specific host
 EDITOR=nvim nix run .#agenix-edit -- --host server nested/token.age
 
-# Try all configured hosts in sorted order until one can decrypt
+# Process all configured hosts concurrently to prepare access
 EDITOR=nvim nix run .#agenix-edit -- nested/token.age
 ```
 

@@ -5,14 +5,37 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
+from collections.abc import Iterator, Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 from pathlib import Path
+from threading import Event
 
 from .config import HelperConfig, Host, WorkerConfig
-from .process import pipe, run
+from .process import CommandError, cancellation, check_cancelled, pipe, run
 from .rules import Manifest
 from .staging import reject_symlinks
 
 REMOTE_DIRECTORY = re.compile(r"/tmp/agenix-helper\.[A-Za-z0-9]{8}\Z")
+
+
+def ssh_command(target: str, command: str) -> list[str]:
+    return [
+        "ssh",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=10",
+        "-o",
+        "ConnectionAttempts=1",
+        "-o",
+        "ServerAliveInterval=5",
+        "-o",
+        "ServerAliveCountMax=1",
+        target,
+        command,
+    ]
 
 
 def transfer_to_host(
@@ -20,7 +43,7 @@ def transfer_to_host(
 ) -> None:
     pipe(
         ["tar", "-C", str(work), "-cf", "-", "."],
-        ["ssh", target, f"tar -C {shlex.quote(remote)} -xf -"],
+        ssh_command(target, f"tar -C {shlex.quote(remote)} -xf -"),
         operation=f"Send staged files to {target}",
         consumer_stdout=sys.stderr if diagnostics_to_stderr else None,
     )
@@ -30,7 +53,7 @@ def transfer_from_host(
     destination: Path, target: str, remote: str, diagnostics_to_stderr: bool
 ) -> None:
     pipe(
-        ["ssh", target, f"tar -C {shlex.quote(remote)} -cf - ."],
+        ssh_command(target, f"tar -C {shlex.quote(remote)} -cf - ."),
         ["tar", "-C", str(destination), "-xf", "-"],
         operation=f"Receive staged files from {target}",
         consumer_stdout=sys.stderr if diagnostics_to_stderr else None,
@@ -50,7 +73,7 @@ def run_host(
     target = host.target
     WorkerConfig(host.identity_paths, rules_dir, action).write(helper)
     result = run(
-        ["ssh", target, "mktemp -d /tmp/agenix-helper.XXXXXXXX"],
+        ssh_command(target, "mktemp -d /tmp/agenix-helper.XXXXXXXX"),
         operation=f"Create staging directory on {target}",
         stdout=subprocess.PIPE,
         text=True,
@@ -75,7 +98,7 @@ def run_host(
             ]
         )
         run(
-            ["ssh", target, command],
+            ssh_command(target, command),
             operation=f"Run worker on {target}",
             stdout=sys.stderr if diagnostics_to_stderr else None,
         )
@@ -85,9 +108,10 @@ def run_host(
         return returned
     finally:
         # Cleanup is best effort when a connection fails; preserve the original failure.
+        token = cancellation.set(None)
         try:
             run(
-                ["ssh", target, f"rm -rf -- {shlex.quote(remote)}"],
+                ssh_command(target, f"rm -rf -- {shlex.quote(remote)}"),
                 operation=f"Clean staging directory on {target}",
                 check=False,
                 stdout=subprocess.DEVNULL,
@@ -97,6 +121,8 @@ def run_host(
                 f"Could not clean staging directory on {target}: {error}",
                 file=sys.stderr,
             )
+        finally:
+            cancellation.reset(token)
 
 
 def process_host(
@@ -134,3 +160,81 @@ def process_host(
             shutil.copy2(returned / relative, work / relative)
     finally:
         shutil.rmtree(returned)
+
+
+@contextmanager
+def processed_hosts(
+    work: Path,
+    selected: Sequence[Host],
+    config: HelperConfig,
+    rules_dir: Path,
+    manifest: Manifest,
+    *,
+    diagnostics_to_stderr: bool = False,
+) -> Iterator[Iterator[tuple[Host, Path]]]:
+    """Run workers on independent snapshots; keep results until the caller merges them."""
+    stopped = Event()
+    with tempfile.TemporaryDirectory(prefix="hosts.", dir=work.parent) as directory:
+        root = Path(directory)
+        # The shared work directory changes as results are merged. All workers
+        # must start from the same immutable snapshot, without the ephemeral key.
+        snapshot = root / "snapshot"
+        shutil.copytree(work, snapshot, symlinks=True)
+
+        def execute(index: int, host: Host) -> Path | None:
+            token = cancellation.set(stopped)
+            try:
+                check_cancelled()
+                host_work = root / str(index) / "work"
+                shutil.copytree(snapshot, host_work, symlinks=True)
+                process_host(
+                    host_work,
+                    host_work / ".agenix-helper",
+                    host,
+                    config,
+                    rules_dir,
+                    manifest,
+                    action="Processed",
+                    diagnostics_to_stderr=diagnostics_to_stderr,
+                )
+                return host_work
+            except CommandError as error:
+                if not host.local and any(
+                    command[0] == "ssh" and status == 255
+                    for command, status in error.failed_commands
+                ):
+                    print(
+                        f"Skipping unreachable host {host.name} ({host.target}): {error}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    return None
+                raise
+            finally:
+                cancellation.reset(token)
+
+        executor = ThreadPoolExecutor(max_workers=config.max_concurrency)
+        futures = {}
+        iterator = None
+        try:
+            for index, host in enumerate(selected):
+                futures[executor.submit(execute, index, host)] = host
+
+            def results() -> Iterator[tuple[Host, Path]]:
+                for future in as_completed(futures):
+                    host_work = future.result()
+                    if host_work is not None:
+                        try:
+                            yield futures[future], host_work
+                        finally:
+                            shutil.rmtree(host_work.parent)
+
+            iterator = results()
+            yield iterator
+        finally:
+            # Interrupts and worker errors stop subprocesses before removing
+            # staging. Each remote attempt still performs best-effort cleanup.
+            stopped.set()
+            executor.shutdown(wait=True, cancel_futures=True)
+            if iterator is not None:
+                iterator.close()

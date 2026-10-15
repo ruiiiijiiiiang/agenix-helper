@@ -4,13 +4,14 @@ import filecmp
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from .config import HelperConfig, Host, Mode, WorkerConfig
-from .hosts import process_host
+from .config import HelperConfig, Host, WorkerConfig
+from .hosts import processed_hosts
 from .process import cancel_editor, run
 from .rules import Manifest, SecretRule, check_rules, write_staged_rules
 from .staging import Stage, write_changed_file
@@ -23,74 +24,11 @@ def prepare_secret(
     secret: str,
     rule: SecretRule,
 ) -> tuple[Path, Path, Path, Path]:
-    """Grant a local identity temporary access to one staged encrypted secret."""
-    work, rules, worker = stage.work, config.rules, config.worker_source
-    reading = config.mode == Mode.READ
-    if any(
-        not key.startswith(("ssh-ed25519 ", "ssh-rsa ")) for key in rule.public_keys
-    ):
-        raise ValueError("Editing and reading currently support only SSH recipients")
-
-    # The private key is outside work, the only directory transferred to workers.
-    identity = work.parent / "ephemeral-identity"
-    run(
-        ["age-keygen", "--output", str(identity)],
-        operation="Generate ephemeral identity",
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
+    """Grant temporary access to one secret using isolated parallel workers."""
+    access_rules, helper, identity, _ = prepare_secrets(
+        stage, config, selected, {secret: rule}
     )
-    identity.chmod(0o600)
-    public_key = run(
-        ["age-keygen", "-y", str(identity)],
-        operation="Derive ephemeral recipient",
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-    temporary_rule = rule.with_recipient(public_key)
-    access_rules = write_staged_rules(work, rules, {secret: temporary_rule})
-    helper = stage.prepare_worker(worker, {secret: temporary_rule})
-
-    relative = rules.parent / secret
-    encrypted = work / relative
-    verified = False
-    for host in selected:
-        if verified:
-            break
-        process_host(
-            work,
-            helper,
-            host,
-            config,
-            rules.parent,
-            {secret: temporary_rule},
-            action="Processed",
-            diagnostics_to_stderr=reading,
-        )
-        # Native age recipients cannot be checked by agenix --check. Prove
-        # temporary access by decrypting to /dev/null with this operation's key.
-        verified = (
-            run(
-                [
-                    "age",
-                    "--decrypt",
-                    "--identity",
-                    str(identity),
-                    "--output",
-                    os.devnull,
-                    str(encrypted),
-                ],
-                operation="Verify ephemeral access",
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            ).returncode
-            == 0
-        )
-    if not verified:
-        raise RuntimeError(
-            "Selected hosts could not prepare the secret; no local files were changed"
-        )
-    return access_rules, helper, encrypted, identity
+    return access_rules, helper, stage.work / config.rules.parent / secret, identity
 
 
 def prepare_secrets(
@@ -133,44 +71,41 @@ def prepare_secrets(
     helper = stage.prepare_worker(worker, temporary_manifest)
 
     readable: Manifest = {}
-    for host in selected:
-        if len(readable) == len(manifest):
-            break
-        process_host(
-            work,
-            helper,
-            host,
-            config,
-            rules.parent,
-            temporary_manifest,
-            action="Processed",
-            diagnostics_to_stderr=True,
-        )
-        # Native age recipients cannot be checked by agenix --check. Prove
-        # temporary access by decrypting to /dev/null with this operation's key.
-        for secret in manifest:
-            if secret in readable:
-                continue
-            encrypted = work / rules.parent / secret
-            if (
-                run(
-                    [
-                        "age",
-                        "--decrypt",
-                        "--identity",
-                        str(identity),
-                        "--output",
-                        os.devnull,
-                        str(encrypted),
-                    ],
-                    operation="Verify ephemeral access",
-                    check=False,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                ).returncode
-                == 0
-            ):
-                readable[secret] = manifest[secret]
+    with processed_hosts(
+        work,
+        selected,
+        config,
+        rules.parent,
+        temporary_manifest,
+        diagnostics_to_stderr=True,
+    ) as results:
+        for _, host_work in results:
+            # Verify each candidate independently. An unchanged ciphertext from
+            # another host must never overwrite a successfully prepared secret.
+            for secret in manifest:
+                if secret in readable:
+                    continue
+                encrypted = host_work / rules.parent / secret
+                if (
+                    run(
+                        [
+                            "age",
+                            "--decrypt",
+                            "--identity",
+                            str(identity),
+                            "--output",
+                            os.devnull,
+                            str(encrypted),
+                        ],
+                        operation="Verify ephemeral access",
+                        check=False,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    ).returncode
+                    == 0
+                ):
+                    shutil.copy2(encrypted, work / rules.parent / secret)
+                    readable[secret] = manifest[secret]
     missing = [secret for secret in manifest if secret not in readable]
     if not readable or (missing and not all_secrets):
         raise RuntimeError(
@@ -324,19 +259,24 @@ def rekey_secrets(
 ) -> int:
     work, rules = stage.work, config.rules
     check_rules_path = write_staged_rules(work, rules, manifest) if targeted else rules
-    helper = stage.prepare_worker(config.worker_source, manifest)
+    stage.prepare_worker(config.worker_source, manifest)
     if check_rules(work, check_rules_path):
         print("All recipients already match the rules; no files were changed.")
         return 0
-    verified = False
-    for host in selected:
-        process_host(
-            work, helper, host, config, rules.parent, manifest, action="Processed"
-        )
-        if check_rules(work, check_rules_path):
-            verified = True
-            print(f"All recipients match the rules after {host.name}")
-            break
+    processed: set[str] = set()
+    with processed_hosts(work, selected, config, rules.parent, manifest) as results:
+        for _, host_work in results:
+            for secret in manifest:
+                relative = rules.parent / secret
+                candidate = host_work / relative
+                # A worker leaves unreadable files unchanged. Merge only files
+                # it re-encrypted, preserving successes from other workers.
+                if secret not in processed and not filecmp.cmp(
+                    candidate, stage.original / relative, shallow=False
+                ):
+                    shutil.copy2(candidate, work / relative)
+                    processed.add(secret)
+    verified = check_rules(work, check_rules_path)
     if not verified:
         print(
             "Some secrets still have mismatched recipients; no local files were changed.",

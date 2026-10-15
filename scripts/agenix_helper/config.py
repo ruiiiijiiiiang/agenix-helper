@@ -107,6 +107,7 @@ class HelperConfig:
     worker_source: Path
     python_ref: str = "nixpkgs#python3"
     age_ref: str = "nixpkgs#age"
+    max_concurrency: int = 10
 
     @classmethod
     def load(cls, path: Path, worker_source: Path) -> "HelperConfig":
@@ -134,6 +135,9 @@ class HelperConfig:
         age_ref = value.get("ageRef", "nixpkgs#age")
         if not all(isinstance(ref, str) and ref for ref in (python_ref, age_ref)):
             raise ValueError("Package references must be nonempty strings")
+        max_concurrency = value.get("maxConcurrency", 10)
+        if type(max_concurrency) is not int or max_concurrency < 1:
+            raise ValueError("maxConcurrency must be a positive integer")
         return cls(
             mode,
             rules,
@@ -142,6 +146,7 @@ class HelperConfig:
             worker_source,
             python_ref,
             age_ref,
+            max_concurrency,
         )
 
     def select_hosts(self, names: list[str] | None) -> tuple[Host, ...]:

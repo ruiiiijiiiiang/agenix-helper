@@ -98,6 +98,7 @@ class SecretIntegrationFixture(unittest.TestCase):
         ssh.write_text(
             f"#!{sys.executable}\n"
             "import os, shlex, shutil, subprocess, sys\n"
+            "while sys.argv[1] == '-o': del sys.argv[1:3]\n"
             "target, command = sys.argv[1:]\n"
             "with open(os.environ['TEST_REMOTE_LOG'], 'a') as log: log.write(target + ': ' + command + '\\n')\n"
             "args = shlex.split(command)\n"

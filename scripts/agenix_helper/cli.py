@@ -5,12 +5,23 @@ import os
 import re
 import sys
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 
 from .config import HelperConfig, Mode, relative_path
 from .operations import edit_secret, read_secrets, rekey_secrets
 from .rules import load_manifest
 from .staging import Stage, validate_sources
+
+
+def positive_integer(value: str) -> int:
+    try:
+        number = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("must be a positive integer") from None
+    if number < 1:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return number
 
 
 def parse_args(config: HelperConfig) -> tuple[argparse.Namespace, list[str]]:
@@ -24,7 +35,14 @@ def parse_args(config: HelperConfig) -> tuple[argparse.Namespace, list[str]]:
         action="append",
         dest="hosts",
         metavar="NAME",
-        help="Host to use; repeat to try several, or omit to try all configured hosts in sorted order",
+        help="Host to use; repeat to select several, or omit to select all configured hosts",
+    )
+    parser.add_argument(
+        "--max-concurrency",
+        type=positive_integer,
+        default=config.max_concurrency,
+        metavar="COUNT",
+        help="Maximum concurrent host workers (default: %(default)s)",
     )
     parser.add_argument("--dry-run", action="store_true")
     if config.mode.accessing:
@@ -98,6 +116,7 @@ def main() -> int:
         Path(os.environ["AGENIX_HELPER_WORKER"]),
     )
     args, requested = parse_args(config)
+    config = replace(config, max_concurrency=args.max_concurrency)
     repo = args.repo.resolve(strict=True)
     selected = config.select_hosts(args.hosts)
     for source in config.sources:

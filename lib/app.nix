@@ -13,6 +13,7 @@
   name ? defaultName,
   ageRef ? "nixpkgs#age",
   pythonRef ? "nixpkgs#python3",
+  maxConcurrency ? 10,
 }:
 let
   system = pkgs.stdenv.hostPlatform.system;
@@ -29,6 +30,7 @@ let
         ageRef
         pythonRef
         mode
+        maxConcurrency
         ;
     }
   );
@@ -58,6 +60,7 @@ let
 in
 assert builtins.isString rules && rules != "";
 assert builtins.isList sources && sources != [ ];
+assert builtins.isInt maxConcurrency && maxConcurrency > 0;
 assert builtins.elem mode [
   "rekey"
   "edit"
