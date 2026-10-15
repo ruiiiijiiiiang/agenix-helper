@@ -383,9 +383,9 @@ class NixAppTests(unittest.TestCase):
         self.assertEqual(
             apps["combined"],
             {
-                "rekey-secrets": apps["rekey"],
-                "edit-secret": apps["edit"],
-                "read-secret": apps["read"],
+                "agenix-rekey": apps["rekey"],
+                "agenix-edit": apps["edit"],
+                "agenix-read": apps["read"],
             },
         )
 

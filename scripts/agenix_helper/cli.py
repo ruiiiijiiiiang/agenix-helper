@@ -41,7 +41,7 @@ def parse_args(config: HelperConfig) -> tuple[argparse.Namespace, list[str]]:
             parser.add_argument(
                 "--all-secrets",
                 action="store_true",
-                help="Explicitly read every secret in the rules",
+                help="Read every secret the selected hosts can decrypt",
             )
         else:
             parser.description = (
@@ -125,7 +125,9 @@ def main() -> int:
         if args.dry_run:
             return 0
         if config.mode == Mode.READ:
-            return read_secrets(stage, config, selected, manifest)
+            return read_secrets(
+                stage, config, selected, manifest, all_secrets=args.all_secrets
+            )
         if config.mode == Mode.EDIT:
             return edit_secret(
                 stage,

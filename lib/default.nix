@@ -8,8 +8,8 @@ in
   inherit mkRekeyApp mkEditApp mkReadApp;
 
   mkApps = args: {
-    rekey-secrets = mkRekeyApp args;
-    edit-secret = mkEditApp args;
-    read-secret = mkReadApp args;
+    agenix-rekey = mkRekeyApp args;
+    agenix-edit = mkEditApp args;
+    agenix-read = mkReadApp args;
   };
 }

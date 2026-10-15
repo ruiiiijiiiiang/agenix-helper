@@ -6,8 +6,8 @@ import os
 import shlex
 import subprocess
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 from .config import HelperConfig, Host, Mode, WorkerConfig
 from .hosts import process_host
@@ -98,8 +98,10 @@ def prepare_secrets(
     config: HelperConfig,
     selected: Sequence[Host],
     manifest: Manifest,
-) -> tuple[Path, Path, Path]:
-    """Grant a local identity temporary access to all secrets in the manifest."""
+    *,
+    all_secrets: bool = False,
+) -> tuple[Path, Path, Path, Manifest]:
+    """Prepare and verify temporary access to the selected readable secrets."""
     work, rules, worker = stage.work, config.rules, config.worker_source
     if any(
         not key.startswith(("ssh-ed25519 ", "ssh-rsa "))
@@ -130,9 +132,9 @@ def prepare_secrets(
     access_rules = write_staged_rules(work, rules, temporary_manifest)
     helper = stage.prepare_worker(worker, temporary_manifest)
 
-    verified = False
+    readable: Manifest = {}
     for host in selected:
-        if verified:
+        if len(readable) == len(manifest):
             break
         process_host(
             work,
@@ -146,31 +148,43 @@ def prepare_secrets(
         )
         # Native age recipients cannot be checked by agenix --check. Prove
         # temporary access by decrypting to /dev/null with this operation's key.
-        first_secret = next(iter(temporary_manifest))
-        encrypted = work / rules.parent / first_secret
-        verified = (
-            run(
-                [
-                    "age",
-                    "--decrypt",
-                    "--identity",
-                    str(identity),
-                    "--output",
-                    os.devnull,
-                    str(encrypted),
-                ],
-                operation="Verify ephemeral access",
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            ).returncode
-            == 0
-        )
-    if not verified:
+        for secret in manifest:
+            if secret in readable:
+                continue
+            encrypted = work / rules.parent / secret
+            if (
+                run(
+                    [
+                        "age",
+                        "--decrypt",
+                        "--identity",
+                        str(identity),
+                        "--output",
+                        os.devnull,
+                        str(encrypted),
+                    ],
+                    operation="Verify ephemeral access",
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                ).returncode
+                == 0
+            ):
+                readable[secret] = manifest[secret]
+    missing = [secret for secret in manifest if secret not in readable]
+    if not readable or (missing and not all_secrets):
         raise RuntimeError(
             "Selected hosts could not prepare the secrets; no local files were changed"
+            + (f"; unreadable: {', '.join(missing)}" if missing else "")
         )
-    return access_rules, helper, identity
+    if missing:
+        print(f"Skipping {len(missing)} unreadable secrets", file=sys.stderr)
+    return (
+        access_rules,
+        helper,
+        identity,
+        {secret: manifest[secret] for secret in manifest if secret in readable},
+    )
 
 
 def read_secrets(
@@ -178,10 +192,14 @@ def read_secrets(
     config: HelperConfig,
     selected: Sequence[Host],
     manifest: Manifest,
+    *,
+    all_secrets: bool = False,
 ) -> int:
     work = stage.work
-    access_rules, _, identity = prepare_secrets(stage, config, selected, manifest)
-    multiple = len(manifest) > 1
+    access_rules, _, identity, manifest = prepare_secrets(
+        stage, config, selected, manifest, all_secrets=all_secrets
+    )
+    multiple = all_secrets or len(manifest) > 1
     for secret in manifest:
         if multiple:
             print(f"==> {secret} <==", flush=True)

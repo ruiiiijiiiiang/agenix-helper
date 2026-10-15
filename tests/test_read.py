@@ -1,5 +1,6 @@
 """Read integration tests using disposable secrets and simulated SSH."""
 
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -162,6 +163,69 @@ class ReadIntegrationTests(SecretIntegrationFixture):
         self.assertIn("==> nested/token.age <==", result.stdout)
         self.assertIn("==> other.age <==", result.stdout)
         self.assertEqual(self.remote_log.read_text().count("mktemp -d"), 1)
+
+    def restrict_to_other_host(self, secret):
+        subprocess.run(
+            [
+                "age",
+                "--encrypt",
+                "--recipients-file",
+                str(self.keys / "wrong.pub"),
+                "--output",
+                str(secret),
+            ],
+            input=b"other host secret\n",
+            check=True,
+        )
+        self.before = self.snapshot()
+
+    def test_all_secrets_skips_unreadable_first_secret(self):
+        self.restrict_to_other_host(self.secret)
+        result = self.read(args=["--host", "fixture", "--all-secrets"])
+        self.assert_read_success(result, "==> other.age <==\nunrelated secret\n\n")
+        self.assertIn("Skipping 1 unreadable secrets", result.stderr)
+
+    def test_all_secrets_skips_unreadable_later_secret(self):
+        self.restrict_to_other_host(self.other)
+        result = self.read(args=["--host", "fixture", "--all-secrets"])
+        self.assert_read_success(
+            result, "==> nested/token.age <==\noriginal secret\n\n"
+        )
+
+    def test_all_secrets_fails_when_none_are_readable(self):
+        result = self.read(args=["--host", "unreadable", "--all-secrets"])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertIn("Selected hosts could not prepare", result.stderr)
+        self.assertEqual(self.snapshot(), self.before)
+        self.assert_remote_cleanup()
+
+    def test_explicit_secrets_require_every_secret_before_output(self):
+        self.restrict_to_other_host(self.other)
+        result = self.read(args=["--host", "fixture", "nested/token.age", "other.age"])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertIn("unreadable: other.age", result.stderr)
+        self.assertEqual(self.snapshot(), self.before)
+        self.assert_remote_cleanup()
+
+    def test_hosts_with_different_access_prepare_all_secrets(self):
+        self.restrict_to_other_host(self.other)
+        for selection in (
+            ["--all-secrets"],
+            ["nested/token.age", "other.age"],
+        ):
+            with self.subTest(selection=selection):
+                self.remote_log.unlink(missing_ok=True)
+                result = self.read(
+                    args=["--host", "fixture", "--host", "unreadable", *selection]
+                )
+                self.assert_read_success(
+                    result,
+                    "==> nested/token.age <==\noriginal secret\n\n"
+                    "==> other.age <==\nother host secret\n\n",
+                )
+                self.assertEqual(self.remote_log.read_text().count("mktemp -d"), 2)
 
     def test_no_secrets_without_all_secrets_flag_errors(self):
         result = self.read(args=["--host", "fixture"])
