@@ -104,17 +104,17 @@ def entrypoint(main: Callable[[], int]) -> int:
 
 def editor_entrypoint() -> int:
     """Record the editor's status even when agenix continues after its failure."""
-    Path(os.environ["AGENIX_TOOLKIT_EDITOR_PID"]).write_text(str(os.getpid()))
+    Path(os.environ["AGENIX_HELPER_EDITOR_PID"]).write_text(str(os.getpid()))
     code = entrypoint(
         lambda: (
             run(
-                [*shlex.split(os.environ["AGENIX_TOOLKIT_EDITOR"]), *sys.argv[1:]],
+                [*shlex.split(os.environ["AGENIX_HELPER_EDITOR"]), *sys.argv[1:]],
                 operation="Run editor",
                 check=False,
             ).returncode
         )
     )
-    Path(os.environ["AGENIX_TOOLKIT_EDITOR_STATUS"]).write_text(str(code))
+    Path(os.environ["AGENIX_HELPER_EDITOR_STATUS"]).write_text(str(code))
     return code
 
 

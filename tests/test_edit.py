@@ -22,7 +22,7 @@ class SecretIntegrationFixture(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.keys_directory = tempfile.TemporaryDirectory(
-            prefix="agenix-toolkit-test-keys."
+            prefix="agenix-helper-test-keys."
         )
         cls.keys = Path(cls.keys_directory.name)
         for name in ("host", "editor", "wrong"):
@@ -47,7 +47,7 @@ class SecretIntegrationFixture(unittest.TestCase):
         cls.keys_directory.cleanup()
 
     def setUp(self):
-        self.directory = tempfile.TemporaryDirectory(prefix="agenix-toolkit-test.")
+        self.directory = tempfile.TemporaryDirectory(prefix="agenix-helper-test.")
         self.addCleanup(self.directory.cleanup)
         self.root = Path(self.directory.name)
         self.repo = self.root / "repo"
@@ -110,8 +110,8 @@ class SecretIntegrationFixture(unittest.TestCase):
         self.env = {
             **os.environ,
             "PATH": f"{self.bin}:{os.environ['PATH']}",
-            "AGENIX_TOOLKIT_CONFIG": str(self.config),
-            "AGENIX_TOOLKIT_WORKER": str(PROJECT / "scripts/worker.py"),
+            "AGENIX_HELPER_CONFIG": str(self.config),
+            "AGENIX_HELPER_WORKER": str(PROJECT / "scripts/worker.py"),
             "EDITOR": f"{sys.executable} {self.editor}",
             "TEST_REMOTE_LOG": str(self.remote_log),
             "TEST_RULES": str(self.rules),
@@ -371,14 +371,14 @@ class NixAppTests(unittest.TestCase):
         self.assertEqual(apps["rekey"]["type"], "app")
         self.assertEqual(apps["read"]["type"], "app")
         self.assertEqual(
-            apps["edit"]["program"], "/fake/agenix-toolkit-edit/bin/agenix-toolkit-edit"
+            apps["edit"]["program"], "/fake/agenix-helper-edit/bin/agenix-helper-edit"
         )
         self.assertEqual(
             apps["rekey"]["program"],
-            "/fake/agenix-toolkit-rekey/bin/agenix-toolkit-rekey",
+            "/fake/agenix-helper-rekey/bin/agenix-helper-rekey",
         )
         self.assertEqual(
-            apps["read"]["program"], "/fake/agenix-toolkit-read/bin/agenix-toolkit-read"
+            apps["read"]["program"], "/fake/agenix-helper-read/bin/agenix-helper-read"
         )
         self.assertEqual(
             apps["combined"],

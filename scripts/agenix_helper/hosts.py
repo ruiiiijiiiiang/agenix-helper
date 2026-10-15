@@ -7,12 +7,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .config import Host, ToolkitConfig, WorkerConfig
+from .config import HelperConfig, Host, WorkerConfig
 from .process import pipe, run
 from .rules import Manifest
 from .staging import reject_symlinks
 
-REMOTE_DIRECTORY = re.compile(r"/tmp/agenix-toolkit\.[A-Za-z0-9]{8}\Z")
+REMOTE_DIRECTORY = re.compile(r"/tmp/agenix-helper\.[A-Za-z0-9]{8}\Z")
 
 
 def transfer_to_host(
@@ -42,7 +42,7 @@ def run_host(
     helper: Path,
     host: Host,
     rules_dir: Path,
-    config: ToolkitConfig,
+    config: HelperConfig,
     diagnostics_to_stderr: bool,
     action: str,
 ) -> Path:
@@ -50,7 +50,7 @@ def run_host(
     target = host.target
     WorkerConfig(host.identity_paths, rules_dir, action).write(helper)
     result = run(
-        ["ssh", target, "mktemp -d /tmp/agenix-toolkit.XXXXXXXX"],
+        ["ssh", target, "mktemp -d /tmp/agenix-helper.XXXXXXXX"],
         operation=f"Create staging directory on {target}",
         stdout=subprocess.PIPE,
         text=True,
@@ -60,7 +60,7 @@ def run_host(
         raise RuntimeError(f"Unexpected remote staging path: {remote!r}")
     try:
         transfer_to_host(work, target, remote, diagnostics_to_stderr)
-        worker = f"{remote}/.agenix-toolkit/worker.py"
+        worker = f"{remote}/.agenix-helper/worker.py"
         command = shlex.join(
             [
                 "nix",
@@ -103,7 +103,7 @@ def process_host(
     work: Path,
     helper: Path,
     host: Host,
-    config: ToolkitConfig,
+    config: HelperConfig,
     rules_dir: Path,
     manifest: Manifest,
     action: str,

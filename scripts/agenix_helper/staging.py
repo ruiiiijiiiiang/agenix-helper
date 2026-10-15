@@ -41,7 +41,7 @@ class Stage:
                 )
 
     def prepare_worker(self, worker_source: Path, manifest: Manifest) -> Path:
-        helper = self.work / ".agenix-toolkit"
+        helper = self.work / ".agenix-helper"
         if helper.exists():
             raise ValueError("Reserved staging path exists in sources")
         (helper / "recipients").mkdir(parents=True)
@@ -49,13 +49,13 @@ class Stage:
         shutil.copy2(worker_source, helper / "worker.py")
         # Imports must work from the isolated staged bundle, without the controller's checkout.
         shutil.copytree(
-            worker_source.parent / "agenix_toolkit",
-            helper / "agenix_toolkit",
+            worker_source.parent / "agenix_helper",
+            helper / "agenix_helper",
             ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
         )
         # copytree preserves read-only Nix store directory modes. The staged
         # copy must be removable locally and after its round trip to a worker.
-        runtime = helper / "agenix_toolkit"
+        runtime = helper / "agenix_helper"
         for directory in [runtime, *(path for path in runtime.rglob("*") if path.is_dir())]:
             directory.chmod(stat.S_IMODE(directory.stat().st_mode) | stat.S_IRWXU)
         for name, rule in manifest.items():

@@ -5,12 +5,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts.agenix_toolkit.config import Host
+from scripts.agenix_helper.config import Host
 
 
 class AutomaticLocalHostTests(unittest.TestCase):
     def setUp(self):
-        directory = tempfile.TemporaryDirectory(prefix="agenix-toolkit-host-test.")
+        directory = tempfile.TemporaryDirectory(prefix="agenix-helper-host-test.")
         self.addCleanup(directory.cleanup)
         self.identity = Path(directory.name) / "identity"
         self.identity.write_text("fixture")
@@ -36,7 +36,7 @@ class AutomaticLocalHostTests(unittest.TestCase):
 
     def test_nonmatching_machine_uses_ssh_without_resolving_local_paths(self):
         with patch(
-            "scripts.agenix_toolkit.config.home_path",
+            "scripts.agenix_helper.config.home_path",
             side_effect=AssertionError("remote paths must not be resolved locally"),
         ):
             host = self.resolve("desktop")

@@ -7,13 +7,13 @@ import sys
 import tempfile
 from pathlib import Path
 
-from .config import Mode, ToolkitConfig, relative_path
+from .config import HelperConfig, Mode, relative_path
 from .operations import edit_secret, read_secrets, rekey_secrets
 from .rules import load_manifest
 from .staging import Stage, validate_sources
 
 
-def parse_args(config: ToolkitConfig) -> tuple[argparse.Namespace, list[str]]:
+def parse_args(config: HelperConfig) -> tuple[argparse.Namespace, list[str]]:
     parser = argparse.ArgumentParser(
         description="Rekey, edit, or read staged agenix secrets through selected hosts.",
         allow_abbrev=False,
@@ -93,9 +93,9 @@ def parse_args(config: ToolkitConfig) -> tuple[argparse.Namespace, list[str]]:
 
 
 def main() -> int:
-    config = ToolkitConfig.load(
-        Path(os.environ["AGENIX_TOOLKIT_CONFIG"]),
-        Path(os.environ["AGENIX_TOOLKIT_WORKER"]),
+    config = HelperConfig.load(
+        Path(os.environ["AGENIX_HELPER_CONFIG"]),
+        Path(os.environ["AGENIX_HELPER_WORKER"]),
     )
     args, requested = parse_args(config)
     repo = args.repo.resolve(strict=True)
@@ -111,7 +111,7 @@ def main() -> int:
     if config.mode.accessing or local_identities:
         validate_sources(repo, config.sources, local_identities)
     with tempfile.TemporaryDirectory(
-        prefix="agenix-toolkit.", dir="/tmp"
+        prefix="agenix-helper.", dir="/tmp"
     ) as scratch_name:
         stage = Stage.create(repo, Path(scratch_name), config.sources)
         manifest = load_manifest(stage.work, config.rules, requested)

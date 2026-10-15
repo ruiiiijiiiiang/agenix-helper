@@ -49,9 +49,9 @@ let
       import sys
 
       os.environ["PATH"] = "${runtimePath}:" + os.environ.get("PATH", "")
-      os.environ["AGENIX_TOOLKIT_CONFIG"] = "${configFile}"
+      os.environ["AGENIX_HELPER_CONFIG"] = "${configFile}"
       os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
-      os.environ["AGENIX_TOOLKIT_WORKER"] = "${scriptsRoot}/worker.py"
+      os.environ["AGENIX_HELPER_WORKER"] = "${scriptsRoot}/worker.py"
       os.execv("${pkgs.python3}/bin/python3", ["python3", "${scriptsRoot}/controller.py", *sys.argv[1:]])
     '';
   };

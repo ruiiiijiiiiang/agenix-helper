@@ -101,8 +101,8 @@ def check_rules(
 
 def write_staged_rules(work: Path, rules: Path, manifest: Manifest) -> Path:
     """Use JSON to preserve evaluated rule attributes without rewriting Nix source."""
-    generated = rules.parent / ".agenix-toolkit-access.nix"
-    data = rules.parent / ".agenix-toolkit-access.json"
+    generated = rules.parent / ".agenix-helper-access.nix"
+    data = rules.parent / ".agenix-helper-access.json"
     for relative in (generated, data):
         if (work / relative).exists():
             raise ValueError(f"Reserved staging path exists in sources: {relative}")
@@ -110,6 +110,6 @@ def write_staged_rules(work: Path, rules: Path, manifest: Manifest) -> Path:
         json.dumps({name: rule.to_json() for name, rule in manifest.items()})
     )
     (work / generated).write_text(
-        "builtins.fromJSON (builtins.readFile ./.agenix-toolkit-access.json)\n"
+        "builtins.fromJSON (builtins.readFile ./.agenix-helper-access.json)\n"
     )
     return generated

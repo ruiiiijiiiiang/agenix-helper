@@ -79,7 +79,7 @@ class RuntimeBundleTests(SecretIntegrationFixture):
         runtime = self.root / "runtime"
         shutil.copytree(PROJECT / "scripts", runtime)
         self.controller = runtime / "controller.py"
-        self.env["AGENIX_TOOLKIT_WORKER"] = str(runtime / "worker.py")
+        self.env["AGENIX_HELPER_WORKER"] = str(runtime / "worker.py")
         self.env["PYTHONPATH"] = ""
         self.assert_success(self.run_controller(), b"edited secret\n")
         self.assertEqual(self.remote_log.read_text().count("mktemp -d"), 1)
@@ -88,8 +88,8 @@ class RuntimeBundleTests(SecretIntegrationFixture):
         runtime = self.root / "readonly-runtime"
         shutil.copytree(PROJECT / "scripts", runtime)
         # Include a nested directory to exercise recursive permission normalization.
-        (runtime / "agenix_toolkit" / "nested").mkdir()
-        (runtime / "agenix_toolkit" / "nested" / "data").write_text("fixture")
+        (runtime / "agenix_helper" / "nested").mkdir()
+        (runtime / "agenix_helper" / "nested" / "data").write_text("fixture")
         directories = [runtime, *(p for p in runtime.rglob("*") if p.is_dir())]
         for path in runtime.rglob("*"):
             if path.is_file():
@@ -103,7 +103,7 @@ class RuntimeBundleTests(SecretIntegrationFixture):
 
         self.addCleanup(restore_fixture_permissions)
         self.controller = runtime / "controller.py"
-        self.env["AGENIX_TOOLKIT_WORKER"] = str(runtime / "worker.py")
+        self.env["AGENIX_HELPER_WORKER"] = str(runtime / "worker.py")
         self.env["PYTHONPATH"] = ""
         self.settings["mode"] = "read"
         result = self.run_controller(interactive=False)
@@ -165,15 +165,15 @@ class RuntimeBundleTests(SecretIntegrationFixture):
         self.assertIsNotNone(worker)
         scripts_root = Path(controller.group(1)).parent
         self.assertEqual(Path(worker.group(1)).parent, scripts_root)
-        self.assertTrue((scripts_root / "agenix_toolkit/cli.py").is_file())
-        self.assertTrue((scripts_root / "agenix_toolkit/crypto.py").is_file())
-        self.assertTrue((scripts_root / "agenix_toolkit/process.py").is_file())
+        self.assertTrue((scripts_root / "agenix_helper/cli.py").is_file())
+        self.assertTrue((scripts_root / "agenix_helper/crypto.py").is_file())
+        self.assertTrue((scripts_root / "agenix_helper/process.py").is_file())
 
 
 class ProcessCleanupTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory(
-            prefix="agenix-toolkit-process-test."
+            prefix="agenix-helper-process-test."
         )
         self.addCleanup(self.directory.cleanup)
         self.root = Path(self.directory.name)
@@ -225,7 +225,7 @@ class ProcessCleanupTests(unittest.TestCase):
         sleeper, pid_path = self.sleeper("child")
         runner = self.run_runner(
             "import pathlib, sys, tempfile\n"
-            "from agenix_toolkit.process import entrypoint, run\n"
+            "from agenix_helper.process import entrypoint, run\n"
             "def main():\n"
             f"    with tempfile.TemporaryDirectory(dir={str(self.root)!r}, prefix='scratch.') as scratch:\n"
             "        pathlib.Path(scratch, 'staged').write_text('temporary')\n"
@@ -250,7 +250,7 @@ class ProcessCleanupTests(unittest.TestCase):
         consumer, consumer_pid = self.sleeper("consumer", consume=True)
         runner = self.run_runner(
             "import sys\n"
-            "from agenix_toolkit.process import entrypoint, pipe\n"
+            "from agenix_helper.process import entrypoint, pipe\n"
             "def main():\n"
             f"    pipe([sys.executable, {str(producer)!r}], [sys.executable, {str(consumer)!r}], operation='Test pipe')\n"
             "    return 0\n"
@@ -270,7 +270,7 @@ class ProcessCleanupTests(unittest.TestCase):
     def test_pipeline_reports_failed_producer(self):
         runner = self.run_runner(
             "import sys\n"
-            "from agenix_toolkit.process import entrypoint, pipe\n"
+            "from agenix_helper.process import entrypoint, pipe\n"
             "def main():\n"
             "    pipe([sys.executable, '-c', 'import sys; sys.exit(7)'],\n"
             "         [sys.executable, '-c', 'import sys; sys.stdin.buffer.read()'], operation='Test pipe')\n"

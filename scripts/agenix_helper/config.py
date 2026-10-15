@@ -99,7 +99,7 @@ class Host:
 
 
 @dataclass(frozen=True)
-class ToolkitConfig:
+class HelperConfig:
     mode: Mode
     rules: Path
     sources: tuple[Path, ...]
@@ -109,10 +109,10 @@ class ToolkitConfig:
     age_ref: str = "nixpkgs#age"
 
     @classmethod
-    def load(cls, path: Path, worker_source: Path) -> "ToolkitConfig":
+    def load(cls, path: Path, worker_source: Path) -> "HelperConfig":
         value = json.loads(path.read_text())
         if not isinstance(value, dict):
-            raise ValueError("Toolkit configuration must be an attribute set")
+            raise ValueError("Helper configuration must be an attribute set")
         mode_value = value.get("mode", "rekey")
         try:
             mode = Mode(mode_value)

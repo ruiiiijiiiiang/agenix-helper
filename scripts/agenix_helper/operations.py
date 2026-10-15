@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
-from .config import Host, Mode, ToolkitConfig, WorkerConfig
+from .config import HelperConfig, Host, Mode, WorkerConfig
 from .hosts import process_host
 from .process import cancel_editor, run
 from .rules import Manifest, SecretRule, check_rules, write_staged_rules
@@ -18,7 +18,7 @@ from .staging import Stage, write_changed_file
 
 def prepare_secret(
     stage: Stage,
-    config: ToolkitConfig,
+    config: HelperConfig,
     selected: Sequence[Host],
     secret: str,
     rule: SecretRule,
@@ -95,7 +95,7 @@ def prepare_secret(
 
 def prepare_secrets(
     stage: Stage,
-    config: ToolkitConfig,
+    config: HelperConfig,
     selected: Sequence[Host],
     manifest: Manifest,
 ) -> tuple[Path, Path, Path]:
@@ -175,7 +175,7 @@ def prepare_secrets(
 
 def read_secrets(
     stage: Stage,
-    config: ToolkitConfig,
+    config: HelperConfig,
     selected: Sequence[Host],
     manifest: Manifest,
 ) -> int:
@@ -202,7 +202,7 @@ def read_secrets(
 
 def read_secret(
     stage: Stage,
-    config: ToolkitConfig,
+    config: HelperConfig,
     selected: Sequence[Host],
     secret: str,
     rule: SecretRule,
@@ -213,7 +213,7 @@ def read_secret(
 
 def edit_secret(
     stage: Stage,
-    config: ToolkitConfig,
+    config: HelperConfig,
     selected: Sequence[Host],
     secret: str,
     rule: SecretRule,
@@ -242,8 +242,8 @@ def edit_secret(
     editor_wrapper.write_text(
         "import os, sys\n"
         "sys.dont_write_bytecode = True\n"
-        "sys.path.insert(0, os.environ['AGENIX_TOOLKIT_RUNTIME'])\n"
-        "from agenix_toolkit.process import editor_entrypoint\n"
+        "sys.path.insert(0, os.environ['AGENIX_HELPER_RUNTIME'])\n"
+        "from agenix_helper.process import editor_entrypoint\n"
         "sys.exit(editor_entrypoint())\n"
     )
     try:
@@ -255,10 +255,10 @@ def edit_secret(
                 "AGENIX_RULES": str(work / edit_rules),
                 "TMPDIR": str(editor_temp),
                 "EDITOR": f"{shlex.quote(sys.executable)} {shlex.quote(str(editor_wrapper))}",
-                "AGENIX_TOOLKIT_RUNTIME": str(helper),
-                "AGENIX_TOOLKIT_EDITOR": os.environ["EDITOR"],
-                "AGENIX_TOOLKIT_EDITOR_STATUS": str(editor_status),
-                "AGENIX_TOOLKIT_EDITOR_PID": str(editor_pid),
+                "AGENIX_HELPER_RUNTIME": str(helper),
+                "AGENIX_HELPER_EDITOR": os.environ["EDITOR"],
+                "AGENIX_HELPER_EDITOR_STATUS": str(editor_status),
+                "AGENIX_HELPER_EDITOR_PID": str(editor_pid),
             },
             check=True,
         )
@@ -289,7 +289,7 @@ def edit_secret(
 
 def rekey_secrets(
     stage: Stage,
-    config: ToolkitConfig,
+    config: HelperConfig,
     selected: Sequence[Host],
     manifest: Manifest,
     targeted: bool,

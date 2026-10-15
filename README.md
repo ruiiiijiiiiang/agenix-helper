@@ -1,4 +1,4 @@
-# agenix-toolkit
+# agenix-helper
 
 Read, edit, and rekey agenix secrets using a local or remote host that can decrypt them, without copying host keys to your workstation. To use a remote host, your workstation must have SSH access to it as the user configured in `target`.
 
@@ -10,7 +10,7 @@ Add the flake input and expose all three apps with `lib.mkApps`:
 
 ```nix
 {
-  inputs.agenix-toolkit.url = "github:ruiiiijiiiiang/agenix-toolkit";
+  inputs.agenix-helper.url = "github:ruiiiijiiiiang/agenix-helper";
 
   outputs = inputs@{ nixpkgs, ... }:
     let
@@ -18,7 +18,7 @@ Add the flake input and expose all three apps with `lib.mkApps`:
       pkgs = nixpkgs.legacyPackages.${system};
     in
     {
-      apps.${system} = inputs.agenix-toolkit.lib.mkApps {
+      apps.${system} = inputs.agenix-helper.lib.mkApps {
         inherit pkgs;
         rules = "secrets/secrets.nix";
         sources = [ "secrets" "lib/keys.nix" ];
@@ -41,7 +41,7 @@ In flake-parts, assign to `apps` inside `perSystem`. Merge with existing apps us
 - Read/edit need no user decryption key. The `publicKey`, `publicKeys`, and local `--identity` options have been removed. Remove them from existing app configurations and commands. Secret rules still use `publicKeys` to declare their permanent recipients.
 - `hosts` defines available workers. When omitted, every entry in `nixosConfigurations` becomes an SSH worker targeting `root@<attribute-name>`, using that configuration's `age.identityPaths`. These names must resolve through DNS or SSH configuration, and root SSH access must work. Explicit `hosts` selects exactly that set, without adding other NixOS configurations. Set `target` for a custom SSH user/address, or `local = true` for local execution without SSH. Worker identity paths refer to that host and use its executing user's permissions. Paths may be absolute, start with `~`, or be relative to that user's home.
 
-To run a workstation locally when invoking the toolkit on that machine and use SSH from other machines, set `local = "auto"` with an SSH target:
+To run a workstation locally when invoking the helper on that machine and use SSH from other machines, set `local = "auto"` with an SSH target:
 
 ```nix
 hosts = {
@@ -75,7 +75,7 @@ identityPaths = [ "/etc/ssh/ssh_host_ed25519_key" "/path/to/another-key" ];
 To derive all hosts automatically, omit `hosts` and pass the configurations:
 
 ```nix
-apps.${system} = inputs.agenix-toolkit.lib.mkApps {
+apps.${system} = inputs.agenix-helper.lib.mkApps {
   inherit pkgs;
   inherit (self) nixosConfigurations;
   rules = "secrets/secrets.nix";
@@ -135,7 +135,7 @@ nix run .#read-secret -- --all-secrets
 
 The app generates an ephemeral native age key pair and adds its public recipient to the staged rule. A selected host re-encrypts the secrets in a single round-trip, then the app verifies temporary access by decrypting to `/dev/null`, decrypts locally, and discards staging. The private key never enters the directory transferred to workers. Repository rules and ciphertext remain unchanged.
 
-Local staging is created directly under `/tmp` (ignoring `TMPDIR`), with a `0700` directory and a `0600` private-key file. Normal completion, errors, and handled cancellation remove staging and the key. `SIGKILL` or power loss can leave artifacts; reboot clears them when `/tmp` is tmpfs, while disk-backed `/tmp` depends on system cleanup. The toolkit does not require `/tmp` to be tmpfs.
+Local staging is created directly under `/tmp` (ignoring `TMPDIR`), with a `0700` directory and a `0600` private-key file. Normal completion, errors, and handled cancellation remove staging and the key. `SIGKILL` or power loss can leave artifacts; reboot clears them when `/tmp` is tmpfs, while disk-backed `/tmp` depends on system cleanup. The helper does not require `/tmp` to be tmpfs.
 
 When reading a single secret, standard output contains only decrypted bytes without headers. When reading multiple secrets or using `--all-secrets`, each secret is printed with a `==> path.age <==` header and separated by a blank line. Progress and diagnostics go to standard error. Piping and redirection are supported.
 
@@ -166,7 +166,7 @@ Editor failures, verification failures, source changes, or cancellation before r
 
 Contributions are welcome! Feel free to open an issue or submit a pull request.
 
-Use `path:/path/to/your/checkout` as the flake input URL for local development. Run `nix flake update` in the toolkit checkout to update its locked dependencies.
+Use `path:/path/to/your/checkout` as the flake input URL for local development. Run `nix flake update` in the helper checkout to update its locked dependencies.
 
 With Python, age, agenix, Nix, SSH key generation, and tar on `PATH`, run:
 
@@ -176,7 +176,7 @@ python3 -B -m unittest discover -s tests -v
 
 Tests generate disposable keys and secrets, run real age and agenix commands, and simulate SSH locally. They do not contact hosts or build derivations. The packaging check uses `nix eval` and requires access to the Nix daemon.
 
-`scripts/controller.py` and `scripts/worker.py` are entry points into the standard-library-only `scripts/agenix_toolkit` package:
+`scripts/controller.py` and `scripts/worker.py` are entry points into the standard-library-only `scripts/agenix_helper` package:
 
 | Module          | Responsibility                                        |
 | --------------- | ----------------------------------------------------- |
