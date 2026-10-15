@@ -254,6 +254,7 @@ def edit_secret(
     editor_temp = work.parent / "editor"
     editor_temp.mkdir(mode=0o700)
     editor_status = editor_temp / "status"
+    editor_changed = editor_temp / "changed"
     editor_pid = editor_temp / "pid"
     editor_wrapper = editor_temp / "editor.py"
     # Agenix can continue after a failed editor; record its status independently.
@@ -276,6 +277,7 @@ def edit_secret(
                 "AGENIX_HELPER_RUNTIME": str(helper),
                 "AGENIX_HELPER_EDITOR": os.environ["EDITOR"],
                 "AGENIX_HELPER_EDITOR_STATUS": str(editor_status),
+                "AGENIX_HELPER_EDITOR_CHANGED": str(editor_changed),
                 "AGENIX_HELPER_EDITOR_PID": str(editor_pid),
             },
             check=True,
@@ -284,8 +286,16 @@ def edit_secret(
         cancel_editor(editor_pid, editor_status)
     if not editor_status.is_file() or editor_status.read_text() != "0":
         raise RuntimeError("Editor failed; no local files were changed")
+    if not editor_changed.is_file() or editor_changed.read_text() not in ("0", "1"):
+        raise RuntimeError(
+            "Editor change detection failed; no local files were changed"
+        )
+    if editor_changed.read_text() == "0":
+        stage.assert_unchanged("editing")
+        print("No changes; original encrypted file preserved.")
+        return 0
 
-    # Always reencrypt, including when agenix skips an unchanged edit. Only this file is processed.
+    # Restore original recipients before committing the edited secret.
     recipients.write_text("\n".join(rule.public_keys) + "\n")
     WorkerConfig((str(identity),), rules.parent, action="Processed").write(helper)
     run(

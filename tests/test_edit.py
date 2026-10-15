@@ -86,7 +86,8 @@ class SecretIntegrationFixture(unittest.TestCase):
             "path = pathlib.Path(sys.argv[1])\n"
             "assert path.read_bytes() == b'original secret\\n'\n"
             "mode = os.environ.get('TEST_EDITOR_MODE', 'change')\n"
-            "if mode != 'noop': path.write_bytes(b'edited secret\\n')\n"
+            "if mode == 'save': path.write_bytes(path.read_bytes())\n"
+            "elif mode != 'noop': path.write_bytes(b'edited secret\\n')\n"
             "if mode == 'conflict': pathlib.Path(os.environ['TEST_RULES']).write_text('external change\\n')\n"
             "if mode == 'fail': sys.exit(7)\n"
         )
@@ -192,8 +193,19 @@ class EditIntegrationTests(SecretIntegrationFixture):
         self.assertEqual(log.count("mktemp -d"), 1)
         self.assertNotIn(str(self.keys / "editor"), log)
 
-    def test_unchanged_editor_still_removes_temporary_recipient(self):
-        self.assert_success(self.run_controller(mode="noop"), b"original secret\n")
+    def test_unchanged_editor_preserves_original_ciphertext(self):
+        for mode in ("noop", "save"):
+            with self.subTest(mode=mode):
+                before_stat = self.secret.stat()
+                result = self.run_controller(mode=mode)
+                self.assert_success(result, b"original secret\n")
+                self.assertEqual(self.snapshot(), self.before)
+                self.assertEqual(
+                    self.secret.stat().st_mtime_ns, before_stat.st_mtime_ns
+                )
+                self.assertEqual(self.secret.stat().st_ino, before_stat.st_ino)
+                self.assertIn("No changes", result.stdout)
+                self.assertNotIn("Updated", result.stdout)
 
     def test_armored_secret(self):
         self.rules.write_text(
@@ -289,8 +301,24 @@ class EditIntegrationTests(SecretIntegrationFixture):
         self.keys_file.write_text(
             f"[ {json.dumps(self.host_key)} {json.dumps(self.editor_key)} ]\n"
         )
+        subprocess.run(
+            [
+                "age",
+                "--encrypt",
+                "--recipient",
+                self.host_key,
+                "--recipient",
+                self.editor_key,
+                "--output",
+                str(self.secret),
+            ],
+            input=b"original secret\n",
+            check=True,
+        )
+        self.before = self.snapshot()
         result = self.run_controller(mode="noop")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.snapshot(), self.before)
         decrypted = subprocess.run(
             ["age", "-d", "-i", str(self.keys / "editor"), str(self.secret)],
             capture_output=True,

@@ -103,17 +103,25 @@ def entrypoint(main: Callable[[], int]) -> int:
 
 
 def editor_entrypoint() -> int:
-    """Record the editor's status even when agenix continues after its failure."""
+    """Record editor status and whether its plaintext changed."""
     Path(os.environ["AGENIX_HELPER_EDITOR_PID"]).write_text(str(os.getpid()))
-    code = entrypoint(
-        lambda: (
-            run(
-                [*shlex.split(os.environ["AGENIX_HELPER_EDITOR"]), *sys.argv[1:]],
-                operation="Run editor",
-                check=False,
-            ).returncode
-        )
-    )
+
+    def edit() -> int:
+        plaintext = Path(sys.argv[-1])
+        original = plaintext.read_bytes()
+        code = run(
+            [*shlex.split(os.environ["AGENIX_HELPER_EDITOR"]), *sys.argv[1:]],
+            operation="Run editor",
+            check=False,
+        ).returncode
+        if code == 0:
+            changed = plaintext.read_bytes() != original
+            Path(os.environ["AGENIX_HELPER_EDITOR_CHANGED"]).write_text(
+                "1" if changed else "0"
+            )
+        return code
+
+    code = entrypoint(edit)
     Path(os.environ["AGENIX_HELPER_EDITOR_STATUS"]).write_text(str(code))
     return code
 

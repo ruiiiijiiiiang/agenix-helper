@@ -160,7 +160,7 @@ EDITOR=nvim nix run .#agenix-edit -- --host server nested/token.age
 EDITOR=nvim nix run .#agenix-edit -- nested/token.age
 ```
 
-Editing uses the same temporary access workflow as reading, then opens the secret locally with `agenix --edit`. After the editor succeeds, the app uses the ephemeral identity to re-encrypt for the original recipients, verifies them, checks that sources have not changed, and atomically replaces only the selected `.age` file. This happens even if the editor made no changes. Rules and imported Nix files remain unchanged.
+Editing uses the same temporary access workflow as reading, then opens the secret locally with `agenix --edit`. If the plaintext is unchanged after the editor succeeds, the app discards staging and preserves the original `.age` file byte-for-byte. Otherwise, the app uses the ephemeral identity to re-encrypt for the original recipients, verifies them, checks that sources have not changed, and atomically replaces only the selected `.age` file. Rules and imported Nix files remain unchanged.
 
 Editor failures, verification failures, source changes, or cancellation before replacement discard staged changes. Forceful termination can leave temporary artifacts, and editors may retain backups. Removing the temporary recipient does not revoke access to intermediate copies; original recipients retain their existing access.
 
