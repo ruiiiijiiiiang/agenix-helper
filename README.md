@@ -6,7 +6,7 @@ Read, edit, and rekey agenix secrets using a local or remote host that can decry
 
 ## Installation
 
-Add the flake input and expose all three apps with `lib.mkApps`:
+Add the flake input and expose the three apps:
 
 ```nix
 {
@@ -22,81 +22,48 @@ Add the flake input and expose all three apps with `lib.mkApps`:
         inherit pkgs;
         rules = "secrets/secrets.nix";
         sources = [ "secrets" "lib/keys.nix" ];
-        maxConcurrency = 10; # Optional; maximum number of host workers at once.
-        hosts = {
-          localhost = {
-            local = true;
-          };
-          server = {
-            target = "user@server";
-          };
+        hosts.server = {
+          target = "user@server";
+          identity = "/etc/ssh/ssh_host_ed25519_key";
         };
       };
     };
 }
 ```
 
-In flake-parts, assign to `apps` inside `perSystem`. Merge with existing apps using `//`. To expose individual apps, use `lib.mkRekeyApp`, `lib.mkReadApp`, or `lib.mkEditApp` with the same configuration.
+In flake-parts, set `apps` inside `perSystem`. Merge existing apps with `//`. For individual apps, use `lib.mkRekeyApp`, `lib.mkReadApp`, or `lib.mkEditApp`; all constructors accept the same arguments.
 
-- `rules` and `sources` are relative to the repository used at runtime. Include the rules, imported Nix files, and encrypted files. Sources must contain regular files and directories without symlinks; local private keys must stay outside them.
-- Read/edit need no user decryption key. The `publicKey`, `publicKeys`, and local `--identity` options have been removed. Remove them from existing app configurations and commands. Secret rules still use `publicKeys` to declare their permanent recipients.
-- `hosts` defines available workers. When omitted, every entry in `nixosConfigurations` becomes an SSH worker targeting `root@<attribute-name>`, using that configuration's `age.identityPaths`. These names must resolve through DNS or SSH configuration, and root SSH access must work. Explicit `hosts` selects exactly that set, without adding other NixOS configurations. Set `target` for a custom SSH user/address, or `local = true` for local execution without SSH. Worker identity paths refer to that host and use its executing user's permissions. Paths may be absolute, start with `~`, or be relative to that user's home.
+**App parameters**
 
-To run a workstation locally when invoking the helper on that machine and use SSH from other machines, set `local = "auto"` with an SSH target:
+| Parameter | Default | Purpose |
+| --- | --- | --- |
+| `pkgs` | Required | Nixpkgs package set for the local system. |
+| `rules` | Required | Rules file path, relative to the repository used at runtime. |
+| `sources` | Required | Nonempty list of repository-relative files/directories to stage. Include the rules, their imports, and encrypted files; exclude symlinks and private keys. |
+| `hosts` | Derived from `nixosConfigurations` | Worker definitions (see below). Explicit values select exactly those hosts; an empty set is invalid. |
+| `nixosConfigurations` | `{ }` | NixOS configurations supplying host identity paths. If `hosts` is omitted, every configuration becomes an SSH worker at `root@<configuration-name>`. |
+| `maxConcurrency` | `10` | Maximum simultaneous host workers, including local workers. Must be positive; override with `--max-concurrency COUNT` (`1` for sequential execution). |
+| `name` | `"agenix-helper-<operation>"` | Generated executable name, where operation is `rekey`, `read`, or `edit`. |
+| `ageRef` | `"nixpkgs#age"` | Flake package reference for age on SSH workers. |
+| `pythonRef` | `"nixpkgs#python3"` | Flake package reference for Python on SSH workers. |
 
-```nix
-hosts = {
-  workstation = {
-    local = "auto";
-    target = "root@workstation";
-  };
-  laptop = {
-    local = "auto";
-    target = "root@laptop";
-  };
-};
-```
+**Host parameters** (`hosts.<name>`)
 
-Automatic selection compares the runtime hostname with the host entry's name, ignoring case and a trailing dot. A local FQDN such as `workstation.example.com` also matches `workstation`. For aliases, set `localHostname = "workstation";`; an explicit FQDN override requires that full hostname. Detection uses the operating system hostname without DNS lookup. The SSH target is required even on a matching machine.
+| Parameter | Default | Purpose |
+| --- | --- | --- |
+| `target` | Required for SSH and `"auto"` | SSH destination, such as `"user@server"`. Omit when `local = true`. |
+| `local` | `false` | `false`: SSH; `true`: always local; `"auto"`: local when the runtime hostname matches, otherwise SSH. |
+| `localHostname` | Host entry name | Hostname to match for `local = "auto"`; invalid with other modes. |
+| `identityPaths` | Matching configuration's `config.age.identityPaths` | Nonempty list of worker private-key path strings. Takes precedence over `identity`. |
+| `identity` | Unset | Shorthand for a single worker private-key path, used when `identityPaths` is absent. |
 
-Matching hosts validate and use their identity paths locally. Unreadable local keys produce an error without falling back to SSH. Other hosts keep their identity paths for the remote worker to resolve. `local = true` always runs locally and must omit `target`; `local = false` (the default) always uses SSH. `localHostname` is accepted only with `local = "auto"`. Automatically derived hosts remain SSH workers unless you explicitly declare them with automatic local selection.
+At least one host is required. To derive hosts and identities automatically, replace `hosts` in the example with `nixosConfigurations = self.nixosConfigurations;` and bind `self` in the flake's `outputs` arguments. You can also supply configurations alongside explicit hosts to inherit identity paths by matching host name. For aliases, set paths explicitly. Missing or empty identity paths fail evaluation.
 
-Use `identity` for a single worker key:
+Identity paths refer to the executing user's filesystem on each worker: absolute paths, `~` paths, and paths relative to that user's home are accepted. The user must be able to read a key that decrypts the secrets. Private keys stay on their hosts; read/edit generate temporary access automatically and need no user decryption key.
 
-```nix
-identity = "/etc/ssh/ssh_host_ed25519_key";
-```
+For automatic local selection, set `local = "auto"; target = "user@workstation";`. Matching uses the OS hostname without DNS lookup, ignores case and a trailing dot, and lets `workstation.example.com` match `workstation`. An explicit FQDN in `localHostname` requires a full match. Unreadable local identities fail without falling back to SSH.
 
-Or use `identityPaths` for a nonempty list of worker keys:
-
-```nix
-identityPaths = [ "/etc/ssh/ssh_host_ed25519_key" "/path/to/another-key" ];
-```
-
-To derive all hosts automatically, omit `hosts` and pass the configurations:
-
-```nix
-apps.${system} = inputs.agenix-helper.lib.mkApps {
-  inherit pkgs;
-  inherit (self) nixosConfigurations;
-  rules = "secrets/secrets.nix";
-  sources = [ "secrets" ];
-};
-```
-
-At least one host is required. Every derived host must have nonempty `age.identityPaths`; missing or empty paths fail evaluation. Explicit `hosts = { };` also fails instead of falling back to `nixosConfigurations`.
-
-You can also pass `nixosConfigurations = self.nixosConfigurations;` alongside explicit `hosts`. Their identity paths then default to `nixosConfigurations.<host-name>.config.age.identityPaths`; explicit `identityPaths` takes precedence over `identity`, which takes precedence over these defaults. Host names must match configuration names. For aliases, set the paths explicitly, for example `identityPaths = self.nixosConfigurations.workstation.config.age.identityPaths;`.
-
-Only identity path strings enter the app configuration. Defaults come from the supplied evaluated configuration, so keep them aligned with deployed hosts. Workers skip unreadable keys with diagnostics and fail if none are readable. These worker keys remain necessary to decrypt the original secrets.
-
-SSH hosts need `nix`, `tar`, and `mktemp`. The worker obtains Python and age through `nix shell`; override their package references with `pythonRef` and `ageRef` if needed. Local workers use the app's bundled runtime.
-
-All app constructors accept `maxConcurrency`, a positive integer defaulting to `10`. Override it per invocation with `--max-concurrency COUNT`; use `1` to process hosts sequentially. Each selected host receives its own copy of the staged files, and results are merged as hosts finish. All selected hosts are attempted; output keeps the requested secret order regardless of worker completion order. The concurrency limit includes local workers.
-
-SSH connection failures (exit status `255`, including authentication failures and dropped connections during transfers) produce a warning and skip that host. SSH uses noninteractive authentication, a 10-second connection timeout, and keepalive probes to detect lost connections. Configure working SSH keys or an agent before running the helper. Worker failures, invalid results, and local identity errors still fail the operation. Remote cleanup is attempted after staging is created; if the host becomes unreachable, remote temporary ciphertext may remain until the host's `/tmp` cleanup.
-
-Each remote attempt uses up to five SSH invocations: create the temporary directory, upload files, run the worker, download results, and remove the temporary directory. A host unreachable during initial connection uses only the first invocation. Local workers use no SSH.
+SSH workers need `nix`, `tar`, and `mktemp`, plus working noninteractive SSH authentication. Python and age are obtained through `nix shell`; local workers use the bundled runtime. SSH connection failures skip that host with a warning; worker errors still fail the operation.
 
 ## Rekey
 
