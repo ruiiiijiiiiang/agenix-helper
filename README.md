@@ -1,5 +1,7 @@
 # agenix-helper
 
+[![Tests](https://github.com/ruiiiijiiiiang/agenix-helper/actions/workflows/tests.yml/badge.svg?branch=master)](https://github.com/ruiiiijiiiiang/agenix-helper/actions/workflows/tests.yml)
+
 Read, edit, and rekey agenix secrets using a local or remote host that can decrypt them, without copying host keys to your workstation. To use a remote host, your workstation must have SSH access to it as the user configured in `target`.
 
 **Private keys and plaintext never transfer between hosts.** Rekeying happens on the selected host. Reading and editing generate a fresh local age key for each operation, temporarily grant it access to staged ciphertext, then decrypt on your workstation. Operations run only when invoked, independently of NixOS builds and deployments.
@@ -163,6 +165,8 @@ python3 -B -m unittest discover -s tests -v
 ```
 
 Tests generate disposable keys and secrets, run real age and agenix commands, and simulate SSH locally. They do not contact hosts or build derivations. The packaging check uses `nix eval` and requires access to the Nix daemon.
+
+GitHub Actions runs the test suite in the locked Nix development shell on pushes to `master`, then builds a configured package and checks all three installed commands with `--help`.
 
 `scripts/controller.py` and `scripts/worker.py` are entry points into the standard-library-only `scripts/agenix_helper` package:
 

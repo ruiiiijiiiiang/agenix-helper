@@ -1,0 +1,54 @@
+name: Tests
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+          enable_kvm: false
+
+      - name: Run tests
+        shell: nix develop --no-write-lock-file --command bash -euo pipefail {0}
+        run: |
+          for tool in python3 age-keygen age agenix nix nix-instantiate ssh-keygen tar; do
+            command -v "$tool"
+          done
+          python3 -B -m unittest discover -s tests -v
+
+      - name: Build and check installed commands
+        run: |
+          package_path="$(nix build --no-write-lock-file --no-link --print-out-paths --impure --expr '
+            let
+              flake = builtins.getFlake (toString ./.);
+              pkgs = builtins.getAttr builtins.currentSystem flake.inputs.nixpkgs.legacyPackages;
+            in flake.lib.mkPackage {
+              inherit pkgs;
+              rules = "secrets.nix";
+              sources = [ "secrets.nix" ];
+              hosts.fixture = {
+                target = "fixture";
+                identity = "/fixture-key";
+              };
+            }
+          ')"
+          export PATH="$package_path/bin:$PATH"
+          agenix-read --help
+          agenix-edit --help
+          agenix-rekey --help
