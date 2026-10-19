@@ -126,7 +126,8 @@ class RuntimeBundleTests(SecretIntegrationFixture):
               stdenv.hostPlatform.system = "fixture";
               lib.makeBinPath = _: "/fake/bin";
               writeText = _: _: "/fake/config";
-              writeTextFile = attrs: builtins.toJSON {{ inherit (attrs) text; }};
+              writeTextFile = attrs: {{ inherit (attrs) text; }};
+              symlinkJoin = attrs: attrs.paths;
               python3 = "/fake/python";
               gnutar = "/fake/tar";
               age = "/fake/age";
@@ -134,11 +135,11 @@ class RuntimeBundleTests(SecretIntegrationFixture):
               openssh = "/fake/ssh";
             }};
             agenix.packages.fixture.default = "/fake/agenix";
-          in (import {PROJECT}/lib {{ inherit agenix; }}).mkRekeyApp {{
+          in (import {PROJECT}/lib {{ inherit agenix; }}).mkPackage {{
             inherit pkgs;
             rules = "secrets/secrets.nix";
             sources = [ "secrets" ];
-            hosts = {{}};
+            hosts.fixture = {{ target = "fixture"; identity = "/fixture-key"; }};
           }}
         """
         result = subprocess.run(
@@ -157,17 +158,18 @@ class RuntimeBundleTests(SecretIntegrationFixture):
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        app = json.loads(result.stdout)
-        launcher = json.loads(app["program"].rsplit("/bin/", 1)[0])["text"]
-        controller = re.search(r'"([^"\n]+/controller\.py)"', launcher)
-        worker = re.search(r'"([^"\n]+/worker\.py)"', launcher)
-        self.assertIsNotNone(controller)
-        self.assertIsNotNone(worker)
-        scripts_root = Path(controller.group(1)).parent
-        self.assertEqual(Path(worker.group(1)).parent, scripts_root)
-        self.assertTrue((scripts_root / "agenix_helper/cli.py").is_file())
-        self.assertTrue((scripts_root / "agenix_helper/crypto.py").is_file())
-        self.assertTrue((scripts_root / "agenix_helper/process.py").is_file())
+        launchers = json.loads(result.stdout)
+        self.assertEqual(len(launchers), 3)
+        for launcher in launchers:
+            controller = re.search(r'"([^"\n]+/controller\.py)"', launcher["text"])
+            worker = re.search(r'"([^"\n]+/worker\.py)"', launcher["text"])
+            self.assertIsNotNone(controller)
+            self.assertIsNotNone(worker)
+            scripts_root = Path(controller.group(1)).parent
+            self.assertEqual(Path(worker.group(1)).parent, scripts_root)
+            self.assertTrue((scripts_root / "agenix_helper/cli.py").is_file())
+            self.assertTrue((scripts_root / "agenix_helper/crypto.py").is_file())
+            self.assertTrue((scripts_root / "agenix_helper/process.py").is_file())
 
 
 class ProcessCleanupTests(unittest.TestCase):

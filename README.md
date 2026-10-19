@@ -6,7 +6,7 @@ Read, edit, and rekey agenix secrets using a local or remote host that can decry
 
 ## Installation
 
-Add the flake input and expose the three apps:
+Add the flake input and expose a configured package containing `agenix-read`, `agenix-edit`, and `agenix-rekey`:
 
 ```nix
 {
@@ -18,7 +18,7 @@ Add the flake input and expose the three apps:
       pkgs = nixpkgs.legacyPackages.${system};
     in
     {
-      apps.${system} = inputs.agenix-helper.lib.mkApps {
+      packages.${system}.agenix-helper = inputs.agenix-helper.lib.mkPackage {
         inherit pkgs;
         rules = "secrets/secrets.nix";
         sources = [ "secrets" "lib/keys.nix" ];
@@ -31,9 +31,21 @@ Add the flake input and expose the three apps:
 }
 ```
 
-In flake-parts, set `apps` inside `perSystem`. Merge existing apps with `//`. For individual apps, use `lib.mkRekeyApp`, `lib.mkReadApp`, or `lib.mkEditApp`; all constructors accept the same arguments.
+Install the package with `nix profile add .#agenix-helper`, or add it to your NixOS or Home Manager configuration. Here, `self` refers to your own flake and must be passed into the module if needed:
 
-**App parameters**
+```nix
+# NixOS
+environment.systemPackages = [ self.packages.${pkgs.stdenv.hostPlatform.system}.agenix-helper ];
+
+# Home Manager
+home.packages = [ self.packages.${pkgs.stdenv.hostPlatform.system}.agenix-helper ];
+```
+
+You can also call `inputs.agenix-helper.lib.mkPackage { ... }` directly inside either package list, using the same arguments as above. Once installed, run `agenix-read`, `agenix-edit`, and `agenix-rekey` directly from your secrets repository, or pass `--repo /path/to/repo`. The commands use the rules, sources, and hosts supplied when the package was created.
+
+In flake-parts, set `packages.agenix-helper` inside `perSystem`. `lib.mkPackage` is the only public constructor; configurations using the former `mkApps` or individual app constructors must switch to this package and install it.
+
+**Package parameters**
 
 | Parameter | Default | Purpose |
 | --- | --- | --- |
@@ -43,7 +55,7 @@ In flake-parts, set `apps` inside `perSystem`. Merge existing apps with `//`. Fo
 | `hosts` | Derived from `nixosConfigurations` | Worker definitions (see below). Explicit values select exactly those hosts; an empty set is invalid. |
 | `nixosConfigurations` | `{ }` | NixOS configurations supplying host identity paths. If `hosts` is omitted, every configuration becomes an SSH worker at `root@<configuration-name>`. |
 | `maxConcurrency` | `10` | Maximum simultaneous host workers, including local workers. Must be positive; override with `--max-concurrency COUNT` (`1` for sequential execution). |
-| `name` | `"agenix-helper-<operation>"` | Generated executable name, where operation is `rekey`, `read`, or `edit`. |
+| `name` | `"agenix-helper"` | Package name; commands keep their `agenix-read`, `agenix-edit`, and `agenix-rekey` names. |
 | `ageRef` | `"nixpkgs#age"` | Flake package reference for age on SSH workers. |
 | `pythonRef` | `"nixpkgs#python3"` | Flake package reference for Python on SSH workers. |
 
@@ -71,17 +83,17 @@ Run from your secrets repository, or add `--repo /path/to/repo`:
 
 ```sh
 # Preview without contacting hosts or changing files.
-nix run .#agenix-rekey -- --host server --all-secrets --dry-run
+agenix-rekey --host server --all-secrets --dry-run
 
 # Use a local key without SSH.
-nix run .#agenix-rekey -- --host localhost --all-secrets
+agenix-rekey --host localhost --all-secrets
 
 # Select specific hosts, or all configured hosts.
-nix run .#agenix-rekey -- --host server --host localhost --all-secrets
-nix run .#agenix-rekey -- --all-secrets
+agenix-rekey --host server --host localhost --all-secrets
+agenix-rekey --all-secrets
 
 # Rekey only selected secrets.
-nix run .#agenix-rekey -- --host server nested/token.age other.age
+agenix-rekey --host server nested/token.age other.age
 ```
 
 Secret paths are relative to the rules file's directory and must name existing rules. Specify secret paths to rekey specific secrets, or pass `--all-secrets` to rekey every secret. Omitting both secret paths and `--all-secrets` produces an error; `--all-secrets` cannot be combined with secret paths. Omitting `--host` selects all configured hosts in sorted order; repeated `--host NAME` restricts selection and preserves submission order. Host workers run concurrently, so completion order may differ. Host selection is independent of secret selection. The former `--all` flag has been removed; remove it from existing commands and keep `--all-secrets` where needed.
@@ -90,7 +102,7 @@ Selected hosts are validated before processing. Missing local identities and wor
 
 Each host re-encrypts its independent copies of the files it can decrypt. After merging results, `agenix --check` must confirm every selected secret has the declared recipients before any repository files are updated. Only selected ciphertext is checked and copied back; unrelated missing secrets or recipient mismatches do not block targeted runs.
 
-Before copying back, the app checks that local sources have not changed. Failures before this copy leave the repository untouched; a failure during the copy can leave some files updated. Failed SSH cleanup may leave encrypted files in a remote temporary directory. Review the diff before committing or deploying; the app does neither automatically.
+Before copying back, the helper checks that local sources have not changed. Failures before this copy leave the repository untouched; a failure during the copy can leave some files updated. Failed SSH cleanup may leave encrypted files in a remote temporary directory. Review the diff before committing or deploying; the helper does neither automatically.
 
 ## Read
 
@@ -98,18 +110,18 @@ Run from your secrets repository; no local decryption identity is needed:
 
 ```sh
 # Read a single secret (plain decrypted bytes to stdout)
-nix run .#agenix-read -- --host server nested/token.age
+agenix-read --host server nested/token.age
 
 # Read multiple secrets
-nix run .#agenix-read -- --host server nested/token.age other.age
+agenix-read --host server nested/token.age other.age
 
 # Read every secret accessible to the selected hosts
-nix run .#agenix-read -- --all-secrets
+agenix-read --all-secrets
 ```
 
-With `--all-secrets`, the app prints every secret that the selected hosts can decrypt and reports the number skipped on standard error. For example, `--host server --all-secrets` reads only secrets accessible to that server. Multiple hosts contribute their accessible secrets. If no secrets are readable, the command fails with empty standard output. Explicit secret paths require every requested secret to be readable before any plaintext is printed.
+With `--all-secrets`, the helper prints every secret that the selected hosts can decrypt and reports the number skipped on standard error. For example, `--host server --all-secrets` reads only secrets accessible to that server. Multiple hosts contribute their accessible secrets. If no secrets are readable, the command fails with empty standard output. Explicit secret paths require every requested secret to be readable before any plaintext is printed.
 
-The app generates an ephemeral native age key pair and adds its public recipient to the staged rules. Each selected host independently re-encrypts the secrets it can decrypt in one worker run. As results arrive, the app verifies temporary access for every candidate secret by decrypting to `/dev/null` and merges verified ciphertext. It then decrypts the readable secrets locally and discards staging. The private key never enters any directory transferred to workers. Repository rules and ciphertext remain unchanged.
+The helper generates an ephemeral native age key pair and adds its public recipient to the staged rules. Each selected host independently re-encrypts the secrets it can decrypt in one worker run. As results arrive, the helper verifies temporary access for every candidate secret by decrypting to `/dev/null` and merges verified ciphertext. It then decrypts the readable secrets locally and discards staging. The private key never enters any directory transferred to workers. Repository rules and ciphertext remain unchanged.
 
 Local staging is created directly under `/tmp` (ignoring `TMPDIR`), with a `0700` directory and a `0600` private-key file. Normal completion, errors, and handled cancellation remove staging and the key. `SIGKILL` or power loss can leave artifacts; reboot clears them when `/tmp` is tmpfs, while disk-backed `/tmp` depends on system cleanup. The helper does not require `/tmp` to be tmpfs.
 
@@ -128,13 +140,13 @@ Set `EDITOR` and run from an interactive terminal:
 
 ```sh
 # Edit using a specific host
-EDITOR=nvim nix run .#agenix-edit -- --host server nested/token.age
+EDITOR=nvim agenix-edit --host server nested/token.age
 
 # Process all configured hosts concurrently to prepare access
-EDITOR=nvim nix run .#agenix-edit -- nested/token.age
+EDITOR=nvim agenix-edit nested/token.age
 ```
 
-Editing uses the same temporary access workflow as reading, then opens the secret locally with `agenix --edit`. If the plaintext is unchanged after the editor succeeds, the app discards staging and preserves the original `.age` file byte-for-byte. Otherwise, the app uses the ephemeral identity to re-encrypt for the original recipients, verifies them, checks that sources have not changed, and atomically replaces only the selected `.age` file. Rules and imported Nix files remain unchanged.
+Editing uses the same temporary access workflow as reading, then opens the secret locally with `agenix --edit`. If the plaintext is unchanged after the editor succeeds, the helper discards staging and preserves the original `.age` file byte-for-byte. Otherwise, the helper uses the ephemeral identity to re-encrypt for the original recipients, verifies them, checks that sources have not changed, and atomically replaces only the selected `.age` file. Rules and imported Nix files remain unchanged.
 
 Editor failures, verification failures, source changes, or cancellation before replacement discard staged changes. Forceful termination can leave temporary artifacts, and editors may retain backups. Removing the temporary recipient does not revoke access to intermediate copies; original recipients retain their existing access.
 

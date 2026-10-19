@@ -1,4 +1,4 @@
-"""Public app constructor contracts across the shared Nix library."""
+"""Public package constructor contracts across the shared Nix library."""
 
 import json
 import shutil
@@ -10,13 +10,12 @@ from test_edit import PROJECT
 
 @unittest.skipUnless(shutil.which("nix-instantiate"), "Missing Nix evaluator")
 class LibraryTests(unittest.TestCase):
-    def test_operation_modes_and_custom_names(self):
-        for constructor, mode in (
-            ("mkReadApp", "read"),
-            ("mkEditApp", "edit"),
-            ("mkRekeyApp", "rekey"),
+    def test_package_bundles_configured_commands_with_stable_names(self):
+        for name_arg, expected_name in (
+            ("", "agenix-helper"),
+            ('name = "custom-bundle";', "custom-bundle"),
         ):
-            with self.subTest(constructor=constructor):
+            with self.subTest(name=expected_name):
                 expression = f'''
                   let
                     pkgs = {{
@@ -24,25 +23,30 @@ class LibraryTests(unittest.TestCase):
                       lib.makeBinPath = _: "";
                       writeText = name: text:
                         let config = builtins.fromJSON text; in
-                        assert config.mode == "{mode}";
-                        assert config.maxConcurrency == 10;
+                        assert name == "agenix-${{config.mode}}-config.json";
+                        assert config.rules == "secrets/secrets.nix";
+                        assert config.sources == [ "secrets" ];
+                        assert config.maxConcurrency == 3;
                         assert config.hosts.fixture.identityPaths == [ "/host-key" ];
-                        assert name == "custom-config.json";
                         "/fake/config";
                       writeTextFile = attrs:
-                        assert attrs.name == "custom";
-                        assert attrs.destination == "/bin/custom";
+                        assert attrs.destination == "/bin/${{attrs.name}}";
                         assert builtins.isString attrs.text;
-                        "/fake/package";
+                        "/fake/${{attrs.name}}";
+                      symlinkJoin = attrs: attrs;
                       python3 = "/fake/python";
                     }};
-                    helpers = import {PROJECT}/lib {{ agenix = {{}}; }};
-                  in helpers.{constructor} {{
+                    helpers = ((import {PROJECT}/flake.nix).outputs {{
+                      agenix = {{}};
+                      nixpkgs = {{}};
+                    }}).lib;
+                  in helpers.mkPackage {{
                     inherit pkgs;
-                    name = "custom";
                     rules = "secrets/secrets.nix";
                     sources = [ "secrets" ];
                     hosts.fixture = {{ target = "root@fixture"; identity = "/host-key"; }};
+                    maxConcurrency = 3;
+                    {name_arg}
                   }}
                 '''
                 result = subprocess.run(
@@ -59,48 +63,47 @@ class LibraryTests(unittest.TestCase):
                     text=True,
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
-                app = json.loads(result.stdout)
-                self.assertEqual(app["type"], "app")
-                self.assertEqual(app["program"], "/fake/package/bin/custom")
-                self.assertTrue(
-                    app["meta"]["description"].startswith(mode.capitalize())
+                package = json.loads(result.stdout)
+                self.assertEqual(package["name"], expected_name)
+                self.assertEqual(
+                    package["paths"],
+                    [f"/fake/agenix-{mode}" for mode in ("read", "edit", "rekey")],
                 )
 
     def test_max_concurrency_input_is_shared_and_validated(self):
-        for constructor in ("mkReadApp", "mkEditApp", "mkRekeyApp", "mkApps"):
-            for value, valid in (
-                ("1", True),
-                ("3", True),
-                ("0", False),
-                ("-1", False),
-                ("true", False),
-                ('"2"', False),
-                ("1.5", False),
-            ):
-                with self.subTest(constructor=constructor, value=value):
-                    selection = ".agenix-read" if constructor == "mkApps" else ""
-                    expression = f"""let
-                      pkgs = {{
-                        stdenv.hostPlatform.system = "fixture";
-                        lib.makeBinPath = _: "";
-                        writeText = _: text:
-                          assert (builtins.fromJSON text).maxConcurrency == {value};
-                          "/fake/config";
-                        writeTextFile = attrs: assert builtins.isString attrs.text; "/fake/package";
-                        python3 = "/fake/python";
-                      }};
-                      app = (import {PROJECT}/lib {{ agenix = {{}}; }}).{constructor} {{
-                        inherit pkgs;
-                        rules = "secrets.nix";
-                        sources = [ "secrets" ];
-                        hosts.fixture = {{ target = "fixture"; identity = "/key"; }};
-                        maxConcurrency = {value};
-                      }};
-                    in (app{selection}).program"""
-                    result = subprocess.run(
-                        ["nix-instantiate", "--eval", "--strict", "--expr", expression],
-                        capture_output=True,
-                        check=False,
-                        text=True,
-                    )
-                    self.assertEqual(result.returncode == 0, valid, result.stderr)
+        for value, valid in (
+            ("1", True),
+            ("3", True),
+            ("0", False),
+            ("-1", False),
+            ("true", False),
+            ('"2"', False),
+            ("1.5", False),
+        ):
+            with self.subTest(value=value):
+                expression = f"""let
+                  pkgs = {{
+                    stdenv.hostPlatform.system = "fixture";
+                    lib.makeBinPath = _: "";
+                    writeText = _: text:
+                      assert (builtins.fromJSON text).maxConcurrency == {value};
+                      "/fake/config";
+                    writeTextFile = attrs: assert builtins.isString attrs.text; "/fake/package";
+                    symlinkJoin = attrs: attrs.paths;
+                    python3 = "/fake/python";
+                  }};
+                  package = (import {PROJECT}/lib {{ agenix = {{}}; }}).mkPackage {{
+                    inherit pkgs;
+                    rules = "secrets.nix";
+                    sources = [ "secrets" ];
+                    hosts.fixture = {{ target = "fixture"; identity = "/key"; }};
+                    maxConcurrency = {value};
+                  }};
+                in package"""
+                result = subprocess.run(
+                    ["nix-instantiate", "--eval", "--strict", "--expr", expression],
+                    capture_output=True,
+                    check=False,
+                    text=True,
+                )
+                self.assertEqual(result.returncode == 0, valid, result.stderr)

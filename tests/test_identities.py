@@ -8,7 +8,6 @@ from pathlib import Path
 
 from test_edit import SecretIntegrationFixture
 
-
 PROJECT = Path(__file__).resolve().parents[1]
 
 
@@ -157,9 +156,7 @@ class NixIdentityDefaultsTests(unittest.TestCase):
         configurations="{}",
         expected=None,
         *,
-        combined=False,
         expected_hosts=None,
-        constructor="mkRekeyApp",
     ):
         expected_json = json.dumps(
             expected_hosts
@@ -179,6 +176,7 @@ class NixIdentityDefaultsTests(unittest.TestCase):
                 assert !(actual ? nixosConfigurations);
                 "/fake/config";
               writeTextFile = attrs: assert builtins.isString attrs.text; "/fake/${{attrs.name}}";
+              symlinkJoin = attrs: attrs.paths;
               python3 = "/fake/python";
               gnutar = "/fake/tar";
               age = "/fake/age";
@@ -194,18 +192,19 @@ class NixIdentityDefaultsTests(unittest.TestCase):
               {host_argument}
               nixosConfigurations = {configurations};
             }};
-          in helpers.{"mkApps" if combined else constructor} args
+          in helpers.mkPackage args
         """
         return subprocess.run(
             ["nix-instantiate", "--eval", "--strict", "--json", "--expr", expression],
             capture_output=True,
             text=True,
+            check=False,
         )
 
     def assert_evaluates(self, result):
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_omitted_hosts_derive_all_configurations_for_every_constructor(self):
+    def test_omitted_hosts_derive_all_configurations_for_every_command(self):
         configurations = """
           {
             first.config = {
@@ -219,15 +218,9 @@ class NixIdentityDefaultsTests(unittest.TestCase):
             "first": {"target": "root@first", "identityPaths": ["/first-key"]},
             "second": {"target": "root@second", "identityPaths": ["/second-key"]},
         }
-        for constructor in ("mkApps", "mkRekeyApp", "mkReadApp", "mkEditApp"):
-            with self.subTest(constructor=constructor):
-                self.assert_evaluates(
-                    self.evaluate(
-                        configurations=configurations,
-                        expected_hosts=expected,
-                        constructor=constructor,
-                    )
-                )
+        self.assert_evaluates(
+            self.evaluate(configurations=configurations, expected_hosts=expected)
+        )
 
     def test_explicit_hosts_remain_an_exact_subset(self):
         self.assert_evaluates(
@@ -279,13 +272,12 @@ class NixIdentityDefaultsTests(unittest.TestCase):
             )
         )
 
-    def test_mk_apps_shares_defaults_with_all_constructors(self):
+    def test_package_shares_local_identity_defaults_with_all_commands(self):
         self.assert_evaluates(
             self.evaluate(
                 "{ local = true; }",
                 '{ fixture.config.age.identityPaths = [ "/key" ]; }',
                 {"local": True, "identityPaths": ["/key"]},
-                combined=True,
             )
         )
 
@@ -300,7 +292,6 @@ class NixIdentityDefaultsTests(unittest.TestCase):
                     "target": "root@framework",
                     "identityPaths": ["/key"],
                 },
-                combined=True,
             )
         )
 

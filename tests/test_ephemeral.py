@@ -4,11 +4,11 @@ import json
 import shutil
 import subprocess
 import sys
+import unittest
 from pathlib import Path
 
-import unittest
 import test_edit
-from test_edit import SecretIntegrationFixture, PROJECT
+from test_edit import PROJECT, SecretIntegrationFixture
 
 
 class EphemeralTests(SecretIntegrationFixture):
@@ -70,7 +70,7 @@ class EphemeralTests(SecretIntegrationFixture):
         record = self.assert_cleaned()
         saved = self.root / 'test-key'
         saved.write_text(record['key'])
-        result = subprocess.run(['age', '-d', '-i', str(saved), str(self.secret)], capture_output=True)
+        result = subprocess.run(['age', '-d', '-i', str(saved), str(self.secret)], capture_output=True, check=False)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.rules.read_bytes(), self.before['secrets/secrets.nix'])
 
@@ -110,10 +110,10 @@ class EphemeralTests(SecretIntegrationFixture):
 
 @unittest.skipUnless(shutil.which("nix-instantiate"), "Missing Nix evaluator")
 class EphemeralNixTests(unittest.TestCase):
-    evaluate = test_edit.NixAppTests.evaluate
+    evaluate = test_edit.NixPackageTests.evaluate
 
     def test_removed_public_key_arguments_are_rejected(self):
         for option in ('publicKey = "key";', 'publicKeys = [ "key" ];'):
-            result = self.evaluate(f'((import {PROJECT}/lib {{ agenix = {{}}; }}).mkReadApp {{ pkgs = {{}}; rules = "secrets.nix"; sources = [ "secrets.nix" ]; hosts = {{}}; {option} }}).program')
+            result = self.evaluate(f'(import {PROJECT}/lib {{ agenix = {{}}; }}).mkPackage {{ pkgs = {{}}; rules = "secrets.nix"; sources = [ "secrets.nix" ]; hosts = {{}}; {option} }}')
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('unexpected argument', result.stderr)

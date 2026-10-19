@@ -10,7 +10,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-
 PROJECT = Path(__file__).resolve().parents[1]
 TOOLS = ("age-keygen", "age", "agenix", "nix-instantiate", "ssh-keygen", "tar")
 
@@ -155,6 +154,7 @@ class SecretIntegrationFixture(unittest.TestCase):
                 text=not binary,
                 env=self.env,
                 timeout=30,
+                check=False,
             )
         finally:
             os.close(slave)
@@ -172,6 +172,7 @@ class SecretIntegrationFixture(unittest.TestCase):
         temporary_access = subprocess.run(
             ["age", "-d", "-i", str(self.keys / "editor"), str(self.secret)],
             capture_output=True,
+            check=False,
         )
         self.assertNotEqual(temporary_access.returncode, 0)
         for path, contents in self.before.items():
@@ -183,6 +184,7 @@ class SecretIntegrationFixture(unittest.TestCase):
             env={**self.env, "AGENIX_RULES": str(self.rules)},
             capture_output=True,
             text=True,
+            check=False,
         )
         self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
 
@@ -356,22 +358,26 @@ class EditIntegrationTests(SecretIntegrationFixture):
 
 
 @unittest.skipUnless(shutil.which("nix-instantiate"), "Missing Nix evaluator")
-class NixAppTests(unittest.TestCase):
+class NixPackageTests(unittest.TestCase):
     def evaluate(self, expression):
         return subprocess.run(
             ["nix-instantiate", "--eval", "--strict", "--json", "--expr", expression],
             capture_output=True,
             text=True,
+            check=False,
         )
 
-    def test_exported_apps_without_building_derivations(self):
+    def test_exported_package_without_building_derivations(self):
         expression = f"""
           let
             pkgs = {{
               stdenv.hostPlatform.system = "fixture";
               lib.makeBinPath = packages: builtins.concatStringsSep ":" packages;
-              writeText = name: text: builtins.seq (builtins.fromJSON text) "/fake/${{name}}";
+              writeText = name: text:
+                assert (builtins.fromJSON text).maxConcurrency == 10;
+                "/fake/${{name}}";
               writeTextFile = attrs: assert builtins.isString attrs.text; "/fake/${{attrs.name}}";
+              symlinkJoin = attrs: attrs;
               python3 = "/fake/python";
               gnutar = "/fake/tar";
               age = "/fake/age";
@@ -386,36 +392,16 @@ class NixAppTests(unittest.TestCase):
               sources = [ "secrets" ];
               hosts.fixture = {{ target = "fixture"; identity = "/fake/key"; }};
             }};
-          in {{
-            rekey = helpers.mkRekeyApp args;
-            edit = helpers.mkEditApp args;
-            read = helpers.mkReadApp args;
-            combined = helpers.mkApps args;
-          }}
+          in assert builtins.attrNames helpers == [ "mkPackage" ];
+            helpers.mkPackage args
         """
         result = self.evaluate(expression)
         self.assertEqual(result.returncode, 0, result.stderr)
-        apps = json.loads(result.stdout)
-        self.assertEqual(apps["edit"]["type"], "app")
-        self.assertEqual(apps["rekey"]["type"], "app")
-        self.assertEqual(apps["read"]["type"], "app")
+        package = json.loads(result.stdout)
+        self.assertEqual(package["name"], "agenix-helper")
         self.assertEqual(
-            apps["edit"]["program"], "/fake/agenix-helper-edit/bin/agenix-helper-edit"
-        )
-        self.assertEqual(
-            apps["rekey"]["program"],
-            "/fake/agenix-helper-rekey/bin/agenix-helper-rekey",
-        )
-        self.assertEqual(
-            apps["read"]["program"], "/fake/agenix-helper-read/bin/agenix-helper-read"
-        )
-        self.assertEqual(
-            apps["combined"],
-            {
-                "agenix-rekey": apps["rekey"],
-                "agenix-edit": apps["edit"],
-                "agenix-read": apps["read"],
-            },
+            package["paths"],
+            ["/fake/agenix-read", "/fake/agenix-edit", "/fake/agenix-rekey"],
         )
 
 

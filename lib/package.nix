@@ -1,0 +1,72 @@
+{ agenix }:
+{
+  pkgs,
+  rules,
+  sources,
+  hosts ? builtins.mapAttrs (hostname: _: { target = "root@${hostname}"; }) nixosConfigurations,
+  nixosConfigurations ? { },
+  name ? "agenix-helper",
+  ageRef ? "nixpkgs#age",
+  pythonRef ? "nixpkgs#python3",
+  maxConcurrency ? 10,
+}:
+let
+  system = pkgs.stdenv.hostPlatform.system;
+  scriptsRoot = ../scripts;
+  resolvedHosts = import ./hosts.nix {
+    inherit hosts nixosConfigurations;
+  };
+  runtimePath = pkgs.lib.makeBinPath [
+    agenix.packages.${system}.default
+    pkgs.gnutar
+    pkgs.age
+    pkgs.nix
+    pkgs.openssh
+  ];
+  mkCommand =
+    mode:
+    let
+      command = "agenix-${mode}";
+      configFile = pkgs.writeText "${command}-config.json" (
+        builtins.toJSON {
+          hosts = resolvedHosts;
+          inherit
+            rules
+            sources
+            ageRef
+            pythonRef
+            mode
+            maxConcurrency
+            ;
+        }
+      );
+    in
+    pkgs.writeTextFile {
+      name = command;
+      destination = "/bin/${command}";
+      executable = true;
+      text = /* python */ ''
+        #!${pkgs.python3}/bin/python3
+        import os
+        import sys
+
+        os.environ["PATH"] = "${runtimePath}:" + os.environ.get("PATH", "")
+        os.environ["AGENIX_HELPER_CONFIG"] = "${configFile}"
+        os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+        os.environ["AGENIX_HELPER_WORKER"] = "${scriptsRoot}/worker.py"
+        os.execv("${pkgs.python3}/bin/python3", ["python3", "${scriptsRoot}/controller.py", *sys.argv[1:]])
+      '';
+    };
+in
+assert builtins.isString rules && rules != "";
+assert builtins.isList sources && sources != [ ];
+assert builtins.isInt maxConcurrency && maxConcurrency > 0;
+pkgs.symlinkJoin {
+  inherit name;
+  paths = map mkCommand [
+    "read"
+    "edit"
+    "rekey"
+  ];
+  meta.description = "Read, edit, and rekey agenix secrets through local or remote hosts";
+}
