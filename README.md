@@ -6,6 +6,31 @@ Read, edit, and rekey agenix secrets using a local or remote host that can decry
 
 **Private keys and plaintext never transfer between hosts.** Rekeying happens on the selected host. Reading and editing generate a fresh local age key for each operation, temporarily grant it access to staged ciphertext, then decrypt on your workstation. Operations run only when invoked, independently of NixOS builds and deployments.
 
+## Typical edit workflow
+
+This example edits an existing secret using one remote server that can decrypt it. Set `EDITOR` before running the command. Time runs downward; arrows between columns show files copied over SSH.
+
+```mermaid
+sequenceDiagram
+    participant W as Workstation
+    participant R as Remote server
+
+    Note over W: 1. Run agenix-edit --host server token.age
+    Note over W: 2. Stage files and generate a temporary age key pair
+    W->>R: 3. Copy staged token.age, rules, worker,<br/>and temporary public key over SSH
+    Note over R: 4. Use server identity to decrypt and re-encrypt<br/>for original recipients + temporary recipient
+    R->>W: 5. Copy staged token.age, which now permits<br/>temporary access from workstation, back over SSH
+    Note over R: 6. Remove remote staging
+    Note over W: 7. Verify temporary access, decrypt locally,<br/>and open plaintext in EDITOR
+    Note over W: 8. If changed, re-encrypt locally<br/>for original recipients only
+    Note over W: 9. Verify recipients and unchanged sources,<br/>then atomically replace repository token.age
+    Note over W: 10. Remove local staging and temporary key
+```
+
+Only encrypted secret content crosses between hosts; editing happens locally, and private keys stay on their respective hosts. The edited secret does not need another trip to the server.
+
+If the plaintext is unchanged, steps 7–8 are skipped and the original `.age` file is preserved byte-for-byte. Failures or cancellation before replacement discard staged changes. Cleanup normally removes temporary files; forceful termination can leave artifacts, and failed SSH cleanup can leave encrypted remote staging.
+
 ## Installation
 
 Add the flake input and expose a configured package containing `agenix-read`, `agenix-edit`, and `agenix-rekey`:
@@ -49,27 +74,27 @@ In flake-parts, set `packages.agenix-helper` inside `perSystem`. `lib.mkPackage`
 
 **Package parameters**
 
-| Parameter | Default | Purpose |
-| --- | --- | --- |
-| `pkgs` | Required | Nixpkgs package set for the local system. |
-| `rules` | Required | Rules file path, relative to the repository used at runtime. |
-| `sources` | Required | Nonempty list of repository-relative files/directories to stage. Include the rules, their imports, and encrypted files; exclude symlinks and private keys. |
-| `hosts` | Derived from `nixosConfigurations` | Worker definitions (see below). Explicit values select exactly those hosts; an empty set is invalid. |
-| `nixosConfigurations` | `{ }` | NixOS configurations supplying host identity paths. If `hosts` is omitted, every configuration becomes an SSH worker at `root@<configuration-name>`. |
-| `maxConcurrency` | `10` | Maximum simultaneous host workers, including local workers. Must be positive; override with `--max-concurrency COUNT` (`1` for sequential execution). |
-| `name` | `"agenix-helper"` | Package name; commands keep their `agenix-read`, `agenix-edit`, and `agenix-rekey` names. |
-| `ageRef` | `"nixpkgs#age"` | Flake package reference for age on SSH workers. |
-| `pythonRef` | `"nixpkgs#python3"` | Flake package reference for Python on SSH workers. |
+| Parameter             | Default                            | Purpose                                                                                                                                                    |
+| --------------------- | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pkgs`                | Required                           | Nixpkgs package set for the local system.                                                                                                                  |
+| `rules`               | Required                           | Rules file path, relative to the repository used at runtime.                                                                                               |
+| `sources`             | Required                           | Nonempty list of repository-relative files/directories to stage. Include the rules, their imports, and encrypted files; exclude symlinks and private keys. |
+| `hosts`               | Derived from `nixosConfigurations` | Worker definitions (see below). Explicit values select exactly those hosts; an empty set is invalid.                                                       |
+| `nixosConfigurations` | `{ }`                              | NixOS configurations supplying host identity paths. If `hosts` is omitted, every configuration becomes an SSH worker at `root@<configuration-name>`.       |
+| `maxConcurrency`      | `10`                               | Maximum simultaneous host workers, including local workers. Must be positive; override with `--max-concurrency COUNT` (`1` for sequential execution).      |
+| `name`                | `"agenix-helper"`                  | Package name; commands keep their `agenix-read`, `agenix-edit`, and `agenix-rekey` names.                                                                  |
+| `ageRef`              | `"nixpkgs#age"`                    | Flake package reference for age on SSH workers.                                                                                                            |
+| `pythonRef`           | `"nixpkgs#python3"`                | Flake package reference for Python on SSH workers.                                                                                                         |
 
 **Host parameters** (`hosts.<name>`)
 
-| Parameter | Default | Purpose |
-| --- | --- | --- |
-| `target` | Required for SSH and `"auto"` | SSH destination, such as `"user@server"`. Omit when `local = true`. |
-| `local` | `false` | `false`: SSH; `true`: always local; `"auto"`: local when the runtime hostname matches, otherwise SSH. |
-| `localHostname` | Host entry name | Hostname to match for `local = "auto"`; invalid with other modes. |
-| `identityPaths` | Matching configuration's `config.age.identityPaths` | Nonempty list of worker private-key path strings. Takes precedence over `identity`. |
-| `identity` | Unset | Shorthand for a single worker private-key path, used when `identityPaths` is absent. |
+| Parameter       | Default                                             | Purpose                                                                                               |
+| --------------- | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `target`        | Required for SSH and `"auto"`                       | SSH destination, such as `"user@server"`. Omit when `local = true`.                                   |
+| `local`         | `false`                                             | `false`: SSH; `true`: always local; `"auto"`: local when the runtime hostname matches, otherwise SSH. |
+| `localHostname` | Host entry name                                     | Hostname to match for `local = "auto"`; invalid with other modes.                                     |
+| `identityPaths` | Matching configuration's `config.age.identityPaths` | Nonempty list of worker private-key path strings. Takes precedence over `identity`.                   |
+| `identity`      | Unset                                               | Shorthand for a single worker private-key path, used when `identityPaths` is absent.                  |
 
 At least one host is required. To derive hosts and identities automatically, replace `hosts` in the example with `nixosConfigurations = self.nixosConfigurations;` and bind `self` in the flake's `outputs` arguments. You can also supply configurations alongside explicit hosts to inherit identity paths by matching host name. For aliases, set paths explicitly. Missing or empty identity paths fail evaluation.
 
