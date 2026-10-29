@@ -8,7 +8,7 @@ Read, edit, and rekey agenix secrets using a local or remote host that can decry
 
 ## Typical edit workflow
 
-This example edits an existing secret using one remote server that can decrypt it. Set `EDITOR` before running the command. Time runs downward; arrows between columns show files copied over SSH.
+This example edits an existing secret using one remote server that can decrypt it.
 
 ```mermaid
 sequenceDiagram
@@ -29,7 +29,7 @@ sequenceDiagram
 
 Only encrypted secret content crosses between hosts; editing happens locally, and private keys stay on their respective hosts. The edited secret does not need another trip to the server.
 
-If the plaintext is unchanged, steps 7–8 are skipped and the original `.age` file is preserved byte-for-byte. Failures or cancellation before replacement discard staged changes. Cleanup normally removes temporary files; forceful termination can leave artifacts, and failed SSH cleanup can leave encrypted remote staging.
+If the plaintext is unchanged, steps 8–9 are skipped and the original `.age` file is preserved byte-for-byte. Failures or cancellation before replacement discard staged changes. Cleanup normally removes temporary files; forceful termination can leave artifacts, and failed SSH cleanup can leave encrypted remote staging.
 
 ## Installation
 
